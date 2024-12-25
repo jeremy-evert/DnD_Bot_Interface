@@ -2,9 +2,18 @@
 Building a backend that will let me play dungeons and dragons with a chatbot and have the documents to make everything work.
 
 
+## Every Time Activate the Virtual Environment
+```source DND/bin/activate```
 
+note: if its not made yet, you can make it like this:
+```python -m venv DND```
 
+Activate the virtual environment:
+On Windows:
+```DND\Scripts\activate```
 
+On macOS/Linux:
+```source DND/bin/activate```
 ---
 
 # To-Do List for DnD GUI with Llama LLM Backend

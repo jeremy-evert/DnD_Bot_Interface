@@ -2,57 +2,42 @@
 Building a backend that will let me play dungeons and dragons with a chatbot and have the documents to make everything work.
 
 
-# TODO List
 
-Here are the tasks planned for the DnD GUI project using Llama LLM. Tasks are numbered for easier tracking, and dependencies are clearly marked.
 
----
-
-## 🧑‍💻 Team Members
-| Name           | Email                        | Phone        | Initials |
-|----------------|------------------------------|--------------|----------|
-| Jeremy Evert   | jeremy.evert@swosu.edu       | 785-443-0967 | JE       |
 
 ---
 
-## 🚀 Features
-| #   | Task                                                   | Assigned To | Dependencies |
-|-----|--------------------------------------------------------|-------------|--------------|
-| 1   | Design the virtual table GUI layout                   |             | None         |
-| 2   | Implement multi-character interaction capabilities     |             | 1            |
-| 3   | Integrate Llama LLM as the backend                    |             | None         |
-| 4   | Add character sheet customization functionality        |             | 2, 3         |
-| 5   | Create save/load game state functionality             |             | 4            |
+# To-Do List for DnD GUI with Llama LLM Backend
+
+| **Item #** | **Task**                                                                 | **Assigned To** | **Dependencies**               |
+|------------|-----------------------------------------------------------------------|-----------------|-------------------------------|
+| 1          | Set up the Python environment and install dependencies (PyQt, Llama LLM, TTS libraries) | JE              | None                          |
+| 2          | Design the GUI layout with placeholders for personas, characters, and table | JE              | None                          |
+| 3          | Integrate Llama LLM for basic natural language understanding and response generation | JE              | 1, 2                         |
+| 4          | Create data models for players, characters, and the Dungeon Master (DM) | JE              | 1, 2                         |
+| 5          | Implement digital character sheets with traditional DnD stats (Strength, Dexterity, etc.) | JE              | 4                            |
+| 6          | Develop tools for the Dungeon Master to manage the arena and NPC interactions | JE              | 3, 4, 5                      |
+| 7          | Add functionality to represent characters as figurines on the virtual tabletop | JE              | 2, 4                         |
+| 8          | Implement voice recording functionality for personal personas           | JE              | 1, 2                         |
+| 9          | Build a feature for uploading recorded voices to train personal persona speech synthesis | JE              | 8                            |
+| 10         | Train AI models to generate custom voices for personal personas based on uploaded samples | JE              | 9                            |
+| 11         | Select or generate default voices for character personas (e.g., Vincent Price-style voice for Dragonborn) | JE              | 7, 9                         |
+| 12         | Integrate text-to-speech (TTS) for personal and character personas       | JE              | 10, 11                       |
+| 13         | Add real-time speech recognition to allow players to interact using their voice | JE              | 12                           |
+| 14         | Enable seamless switching between personal and character voices based on context | JE              | 12, 13                       |
+| 15         | Implement health and stats tracking for all characters and NPCs          | JE              | 5, 6                         |
+| 16         | Finalize DM tools for real-time scenario updates                         | JE              | 6, 15                        |
+| 17         | Test local play functionality, ensuring smooth voice integration         | JE              | 14, 16                       |
+| 18         | Document the setup and usage of the application                          | JE              | 17                           |
 
 ---
 
-## 🛠 Development Steps
-| #   | Step                                                     | Assigned To | Dependencies |
-|-----|----------------------------------------------------------|-------------|--------------|
-| 1   | Set up the Python environment and dependencies          | JE          | None         |
-| 2   | Install and configure Llama LLM locally                 |             | 1            |
-| 3   | Refactor modular code architecture                      |             | None         |
-| 4   | Test Llama integration with sample prompts              |             | 2            |
-| 5   | Optimize LLM query responses for low-latency performance |             | 4            |
-| 6   | Add error handling for GUI interactions                 |             | 3, 5         |
-| 7   | Create unit tests for GUI functionality                 |             | 6            |
+### Key Notes:
+1. **Voice Recording and Uploading**: Ensure that the system supports easy recording and uploading of audio samples to train personal persona voices. The process should be user-friendly and locally stored to maintain privacy.
+2. **Voice Synthesis**: Research and integrate open-source TTS models (e.g., Coqui TTS or similar) to provide high-quality custom voice outputs.
+3. **Speech Recognition**: Use a local speech recognition library like Vosk for privacy and low-latency processing.
+4. **Testing and Refinement**: Each voice-related feature should be rigorously tested to ensure natural transitions between personal and character personas during gameplay.
 
----
-
-## 📖 Documentation
-| #   | Task                                                     | Assigned To | Dependencies |
-|-----|----------------------------------------------------------|-------------|--------------|
-| 1   | Write project overview in `README.md`                   |             | None         |
-| 2   | Document installation and setup process                 |             | 1 (Dev Steps)|
-| 3   | Create examples of usage with screenshots               |             | 1-5 (Dev Steps)|
-
----
-
-## 🐛 Bug Fixes
-| #   | Bug                                                     | Assigned To | Dependencies |
-|-----|----------------------------------------------------------|-------------|--------------|
-| 1   | Fix GUI layout issues for small screens                |             | 1 (Features) |
-| 2   | Resolve intermittent crashes during LLM responses      |             | 5 (Dev Steps)|
 
 ---
 

@@ -32,6 +32,26 @@ Building a backend that will let me play dungeons and dragons with a chatbot and
 
 ---
 
+### **Sub To-Do List for Item 1: Set up the project environment and initialize the repository**
+
+| **Item #** | **Task Description**                                                                                               | **Assigned To**       | **Status** | **Dependencies**                                                                                                   |
+|------------|-------------------------------------------------------------------------------------------------------------------|-----------------------|------------|-------------------------------------------------------------------------------------------------------------------|
+| 1.1        | Install Python (version 3.9 or later)                                                                             | JE                    | [ ]        | None                                                                                                              |
+| 1.2        | Install Git for version control                                                                                   | JE                    | [ ]        | None                                                                                                              |
+| 1.3        | Create a new GitHub repository                                                                                   | JE                    | [ ]        | 1.2                                                                                                               |
+| 1.4        | Clone the GitHub repository locally                                                                              | JE                    | [ ]        | 1.3                                                                                                               |
+| 1.5        | Set up a virtual environment using `venv`                                                                        | JE                    | [ ]        | 1.1                                                                                                               |
+| 1.6        | Install core dependencies (PyTorch, PyQt5, etc.)                                                                 | JE                    | [ ]        | 1.5                                                                                                               |
+| 1.7        | Initialize the project directory structure                                                                       | JE                    | [ ]        | 1.4                                                                                                               |
+| 1.8        | Configure `requirements.txt` to save dependencies                                                                | JE                    | [ ]        | 1.6                                                                                                               |
+| 1.9        | Create a README.md file to describe the project                                                                  | JE                    | [ ]        | None                                                                                                              |
+| 1.10       | Add a `.gitignore` file to exclude unnecessary files                                                             | JE                    | [ ]        | 1.4                                                                                                               |
+| 1.11       | Test initial setup with a basic script                                                                           | JE                    | [ ]        | 1.7                                                                                                               |
+| 1.12       | Commit and push changes to the GitHub repository                                                                 | JE                    | [ ]        | 1.11                                                                                                              |
+| 1.13       | Document issues or questions by creating a section for tracking tasks or challenges on GitHub                    | JE                    | [ ]        | None                                                                                                              |
+
+---
+
 ### Key Notes:
 1. **Voice Recording and Uploading**: Ensure that the system supports easy recording and uploading of audio samples to train personal persona voices. The process should be user-friendly and locally stored to maintain privacy.
 2. **Voice Synthesis**: Research and integrate open-source TTS models (e.g., Coqui TTS or similar) to provide high-quality custom voice outputs.

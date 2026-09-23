@@ -1,6 +1,24 @@
 # DnD_Bot_Interface
 Building a backend that will let me play dungeons and dragons with a chatbot and have the documents to make everything work.
 
+## Play the combat prototype
+
+No installation is required. From the repository root, run:
+
+```sh
+python3 -m dnd_combat
+```
+
+Enter `a` (or `attack`) each time it is the hero's turn. Combat uses initiative,
+d20 attacks against armor class, damage dice, hit points, and ends when either
+the hero or goblin reaches 0 HP.
+
+Run the deterministic rules tests with:
+
+```sh
+python3 -m unittest discover -v
+```
+
 
 ## Every Time Activate the Virtual Environment
 ```source DND/bin/activate```
@@ -144,4 +162,3 @@ The project will be developed in **two-week sprints**, focusing on implementing 
 This project aims to combine the rich tradition of tabletop RPGs with cutting-edge AI technology, delivering an experience that feels both authentic and innovative. The unique voices for both players and their characters will add a compelling dimension to the gameplay, creating a fully immersive DnD experience.  
 
 ---  
-

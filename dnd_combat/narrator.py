@@ -102,7 +102,7 @@ class LocalLLMNarrator(Narrator):
             content = data["choices"][0]["message"]["content"].strip()
             if not content:
                 raise ValueError("Local narrator returned empty content.")
-            return content
+            return f"{plain_text}\nDM: {content}"
         except Exception:
             return self.fallback.narrate(event, facts, plain_text)
 

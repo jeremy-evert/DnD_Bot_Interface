@@ -1,36 +1,67 @@
 # DnD_Bot_Interface
 
-## Play D&D 0.2.5: The Mossy Delve
+## Play D&D 0.3: The Mossy Delve
 
-This is a small deterministic terminal adventure using only the Python standard
-library. Name a hero, choose Fighter, Rogue, or Wizard, explore three connected
-rooms, collect loot, and survive the goblin and final hobgoblin encounters.
+D&D 0.3 keeps the deterministic Python game engine in charge of rules, dice,
+HP, inventory, movement, loot, victory, and death. An optional local LLM can now
+act as a presentation-only narrator for completed game events.
 
-From the repository root, run:
+Plain deterministic mode remains the default:
 
 ```sh
 python3 -m dnd_combat
 ```
 
+### Turn on the local Qwen narrator
+
+The narrator expects an OpenAI-compatible chat-completions endpoint. The default
+endpoint is:
+
+```text
+http://localhost:8080/v1/chat/completions
+```
+
+Enable it with:
+
+```sh
+export DND_NARRATOR=local
+export DND_LLM_MODEL="mlx-community/Qwen3.5-9B-MLX-4bit"
+python3 -m dnd_combat
+```
+
+You can override the endpoint too:
+
+```sh
+export DND_LLM_ENDPOINT="http://localhost:8080/v1/chat/completions"
+```
+
+If the local model server is unavailable, times out, returns malformed JSON, or
+returns empty text, the game automatically falls back to deterministic narration
+and continues.
+
+The local model receives only structured facts about events that the Python
+engine has already resolved. It may decorate room entry, discovered items,
+attack hits and misses, damage, defeated enemies, player death, and victory.
+It cannot change game state or decide outcomes.
+
 Outside combat, use `move`, `look`, and `status` (or their prompted initials).
 Directions accept `north`/`n`, `south`/`s`, `east`/`e`, and `west`/`w`. Use
 `take` to collect visible loot and `use` to drink a healing potion. In combat,
-choose `attack`, `use potion`, or `status`. An attempted potion use with no
-potion is invalid and does **not** consume the hero's turn.
+choose `attack`, `use potion`, or `status`.
 
-Run the deterministic rules tests with:
+Run the full deterministic test suite with:
 
 ```sh
 python3 -m unittest discover -v
 ```
 
-No installation or dependencies are required. Local Python virtual environments
-are ignored by Git.
+No third-party Python packages are required for the game or narrator client.
 
 ## Project status
 
-Current milestone: D&D 0.2.5, a terminal-only deterministic adventure. It has no
-AI, LLM, GUI, agent framework, database, or voice features.
+Current milestone: D&D 0.3, a terminal adventure with an optional local
+Qwen-compatible narrator. The engine remains deterministic and authoritative.
+There is still no GUI, agent framework, database, or voice layer.
 
 ---
 
@@ -38,7 +69,7 @@ AI, LLM, GUI, agent framework, database, or voice features.
 
 The material below preserves the original long-term vision for a future GUI,
 voices, personas, and LLM-backed project. It is not part of the current playable
-D&D 0.2 milestone.
+D&D 0.3 milestone.
 
 Building a backend that will let me play dungeons and dragons with a chatbot and have the documents to make everything work.
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import randint
 from typing import Callable
 
@@ -24,10 +24,23 @@ class Creature:
     damage_die: int
     damage_bonus: int
     initiative_bonus: int = 0
+    max_hp: int | None = None
+    inventory: list[str] = field(default_factory=list)
+    character_class: str = ""
+
+    def __post_init__(self) -> None:
+        if self.max_hp is None:
+            self.max_hp = self.hp
 
     @property
     def alive(self) -> bool:
         return self.hp > 0
+
+    def heal(self, amount: int) -> int:
+        """Restore HP up to the creature's original maximum and report the amount restored."""
+        previous_hp = self.hp
+        self.hp = min(self.max_hp, self.hp + amount)
+        return self.hp - previous_hp
 
 
 @dataclass(frozen=True)
@@ -61,4 +74,3 @@ def make_hero() -> Creature:
 
 def make_goblin() -> Creature:
     return Creature("Goblin", hp=12, armor_class=13, attack_bonus=4, damage_die=6, damage_bonus=2, initiative_bonus=2)
-

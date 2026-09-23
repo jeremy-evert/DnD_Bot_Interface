@@ -1,7 +1,47 @@
 # DnD_Bot_Interface
+
+## Play D&D 0.2: The Mossy Delve
+
+This is a small deterministic terminal adventure using only the Python standard
+library. Name a hero, choose Fighter, Rogue, or Wizard, explore three connected
+rooms, collect a healing potion, and survive the goblin and final hobgoblin
+encounters.
+
+From the repository root, run:
+
+```sh
+python3 -m dnd_combat
+```
+
+Outside combat, use `move`, `look`, and `status` (or their prompted initials).
+Use `take` to collect a visible item and `use` to drink a healing potion. In
+combat, choose `attack`, `use potion`, or `status`.
+
+Run the deterministic rules tests with:
+
+```sh
+python3 -m unittest discover -v
+```
+
+No installation or dependencies are required. Local Python virtual environments
+are ignored by Git.
+
+## Project status
+
+Current milestone: D&D 0.2, a terminal-only deterministic adventure. It has no
+AI, LLM, GUI, agent framework, database, or voice features.
+
+---
+
+## Long-term historical vision
+
+The material below preserves the original long-term vision for a future GUI,
+voices, personas, and LLM-backed project. It is not part of the current playable
+D&D 0.2 milestone.
+
 Building a backend that will let me play dungeons and dragons with a chatbot and have the documents to make everything work.
 
-## Play the combat prototype
+### Historical combat prototype notes
 
 No installation is required. From the repository root, run:
 

@@ -3,8 +3,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# virtual envirnonment
+# Virtual environments
+# (The repository historically used both `dnd` and `DND` as environment names.)
+.venv/
+venv/
 env/
+ENV/
+DND/
+dnd/
 __pycache__/
 *.pyc
 *.pyo

@@ -1,7 +1,7 @@
 """Terminal interface for the deterministic three-room adventure."""
 
 from .adventure import HEALING_POTION, Adventure, make_character
-from .combat import AttackResult, Creature
+from .combat import AttackResult, Creature, Roller, roll_die
 
 
 def show_status(game: Adventure) -> None:
@@ -27,9 +27,9 @@ def choose_character() -> Creature:
         print("Choose fighter, rogue, or wizard.")
 
 
-def run_combat(game: Adventure) -> None:
+def run_combat(game: Adventure, roller: Roller = roll_die) -> None:
     enemy = game.enemy
-    hero_initiative, enemy_initiative = game.start_encounter()
+    hero_initiative, enemy_initiative = game.start_encounter(roller)
     print(f"\n{enemy.name} attacks! Initiative — {game.hero.name}: {hero_initiative}; {enemy.name}: {enemy_initiative}")
     while game.in_combat:
         enemy = game.enemy
@@ -38,7 +38,7 @@ def run_combat(game: Adventure) -> None:
         if game.combat_turn == "hero":
             choice = input("Your turn. [A]ttack, [U]se potion, [S]tatus: ").strip().lower()
             if choice in {"a", "attack"}:
-                describe_attack(game.hero.name, enemy.name, game.player_attack())
+                describe_attack(game.hero.name, enemy.name, game.player_attack(roller))
             elif choice in {"u", "use", "potion"}:
                 used, healed = game.player_use_potion()
                 print(f"You recover {healed} HP." if used else "You have no healing potion.")
@@ -48,7 +48,7 @@ def run_combat(game: Adventure) -> None:
                 print("Choose attack, use, or status.")
         else:
             print(f"{enemy.name}'s turn...")
-            describe_attack(enemy.name, game.hero.name, game.enemy_attack())
+            describe_attack(enemy.name, game.hero.name, game.enemy_attack(roller))
     if game.state == "won":
         print("\nVictory! The hobgoblin captain falls; you have cleared the dungeon.")
     elif game.state == "dead":
@@ -57,13 +57,13 @@ def run_combat(game: Adventure) -> None:
         print(f"{enemy.name} falls.")
 
 
-def main() -> None:
-    print("=== D&D 0.2: The Mossy Delve ===")
+def main(roller: Roller = roll_die) -> None:
+    print("=== D&D 0.2.5: The Mossy Delve ===")
     game = Adventure(choose_character())
     print(f"Welcome, {game.hero.name}. Find your way through three rooms and survive the final encounter.")
     while game.state == "playing":
         if game.in_combat:
-            run_combat(game)
+            run_combat(game, roller)
             continue
         print(f"\n{game.room.name}: {game.look()}")
         choice = input("[M]ove, [L]ook, [S]tatus, [T]ake item, [U]se potion: ").strip().lower()

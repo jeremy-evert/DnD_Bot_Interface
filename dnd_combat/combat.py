@@ -73,4 +73,7 @@ def make_hero() -> Creature:
 
 
 def make_goblin() -> Creature:
-    return Creature("Goblin", hp=12, armor_class=13, attack_bonus=4, damage_die=6, damage_bonus=2, initiative_bonus=2)
+    return Creature(
+        "Goblin", hp=12, armor_class=13, attack_bonus=4, damage_die=6,
+        damage_bonus=2, initiative_bonus=2, inventory=["goblin's brass ring"],
+    )

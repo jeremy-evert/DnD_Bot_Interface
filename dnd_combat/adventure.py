@@ -9,6 +9,13 @@ from .combat import AttackResult, Creature, Roller, attack, roll_die, roll_initi
 
 HEALING_POTION = "healing potion"
 
+DIRECTION_ALIASES = {
+    "north": "north", "n": "north",
+    "south": "south", "s": "south",
+    "east": "east", "e": "east",
+    "west": "west", "w": "west",
+}
+
 
 @dataclass
 class Room:
@@ -20,6 +27,7 @@ class Room:
     items: list[str] = field(default_factory=list)
     enemy: Creature | None = None
     encounter_started: bool = False
+    loot_dropped: bool = False
 
 
 def make_character(choice: str, name: str) -> Creature:
@@ -46,9 +54,15 @@ def make_dungeon() -> dict[str, Room]:
     from .combat import make_goblin
 
     return {
-        "entry": Room("Mossy Entry", "A damp stone entryway. A goblin guards the passage east.", {"east": "stores"}, enemy=make_goblin()),
+        "entry": Room(
+            "Mossy Entry", "A damp stone entryway opens onto a passage east.", {"east": "stores"},
+            enemy=make_goblin(),
+        ),
         "stores": Room("Forgotten Stores", "Broken crates fill a quiet storeroom. A passage continues east.", {"west": "entry", "east": "sanctum"}, [HEALING_POTION]),
-        "sanctum": Room("Captain's Sanctum", "A scarred hobgoblin captain bars the only way out.", {"west": "stores"}, enemy=make_hobgoblin()),
+        "sanctum": Room(
+            "Captain's Sanctum", "A scarred chamber has a passage west.", {"west": "stores"},
+            enemy=make_hobgoblin(),
+        ),
     }
 
 
@@ -76,6 +90,11 @@ class Adventure:
 
     def look(self) -> str:
         details = [self.room.description]
+        if self.enemy is not None:
+            if self.enemy.alive:
+                details.append(f"A {self.enemy.name.lower()} is here.")
+            else:
+                details.append(f"The {self.enemy.name.lower()} lies defeated.")
         if self.room.items:
             details.append("You see: " + ", ".join(self.room.items) + ".")
         details.append("Exits: " + ", ".join(sorted(self.room.exits)) + ".")
@@ -84,7 +103,8 @@ class Adventure:
     def move(self, direction: str) -> tuple[bool, str]:
         if self.in_combat:
             return False, "Defeat the enemy before moving on."
-        destination = self.room.exits.get(direction.lower())
+        canonical_direction = DIRECTION_ALIASES.get(direction.strip().lower())
+        destination = self.room.exits.get(canonical_direction) if canonical_direction else None
         if destination is None:
             return False, "There is no exit that way."
         self.current_room_id = destination
@@ -130,6 +150,11 @@ class Adventure:
         return result
 
     def player_use_potion(self) -> tuple[bool, int]:
+        """Use a potion on the hero's turn.
+
+        A missing potion is an invalid combat action: it changes neither HP nor
+        turn, so the hero may choose a valid action instead.
+        """
         if not self.in_combat or self.combat_turn != "hero":
             raise ValueError("It is not the hero's turn.")
         used, healed = self.use_healing_potion()
@@ -142,8 +167,17 @@ class Adventure:
             self.state = "dead"
             self.combat_turn = None
         elif not self.enemy.alive:
+            self._drop_enemy_loot()
             self.combat_turn = None
             if self.current_room_id == "sanctum":
                 self.state = "won"
         else:
             self.combat_turn = "enemy" if self.combat_turn == "hero" else "hero"
+
+    def _drop_enemy_loot(self) -> None:
+        """Move an enemy's carried items to its room exactly once."""
+        if self.room.loot_dropped or self.enemy is None:
+            return
+        self.room.items.extend(self.enemy.inventory)
+        self.enemy.inventory.clear()
+        self.room.loot_dropped = True

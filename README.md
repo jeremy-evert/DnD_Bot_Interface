@@ -1,11 +1,10 @@
 # DnD_Bot_Interface
 
-## Play D&D 0.2: The Mossy Delve
+## Play D&D 0.2.5: The Mossy Delve
 
 This is a small deterministic terminal adventure using only the Python standard
 library. Name a hero, choose Fighter, Rogue, or Wizard, explore three connected
-rooms, collect a healing potion, and survive the goblin and final hobgoblin
-encounters.
+rooms, collect loot, and survive the goblin and final hobgoblin encounters.
 
 From the repository root, run:
 
@@ -14,8 +13,10 @@ python3 -m dnd_combat
 ```
 
 Outside combat, use `move`, `look`, and `status` (or their prompted initials).
-Use `take` to collect a visible item and `use` to drink a healing potion. In
-combat, choose `attack`, `use potion`, or `status`.
+Directions accept `north`/`n`, `south`/`s`, `east`/`e`, and `west`/`w`. Use
+`take` to collect visible loot and `use` to drink a healing potion. In combat,
+choose `attack`, `use potion`, or `status`. An attempted potion use with no
+potion is invalid and does **not** consume the hero's turn.
 
 Run the deterministic rules tests with:
 
@@ -28,7 +29,7 @@ are ignored by Git.
 
 ## Project status
 
-Current milestone: D&D 0.2, a terminal-only deterministic adventure. It has no
+Current milestone: D&D 0.2.5, a terminal-only deterministic adventure. It has no
 AI, LLM, GUI, agent framework, database, or voice features.
 
 ---

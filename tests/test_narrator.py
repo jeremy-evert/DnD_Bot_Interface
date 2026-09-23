@@ -68,6 +68,12 @@ class NarratorTests(unittest.TestCase):
         self.assertEqual(captured["url"], "http://example.test/v1/chat/completions")
         self.assertEqual(captured["timeout"], 1.25)
         self.assertEqual(captured["payload"]["model"], "test-model")
+        self.assertEqual(
+            captured["payload"]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
+        self.assertEqual(captured["payload"]["top_p"], 0.8)
+        self.assertEqual(captured["payload"]["top_k"], 20)
         event = json.loads(captured["payload"]["messages"][1]["content"])
         self.assertEqual(event["event"], "enemy_defeated")
         self.assertEqual(event["facts"]["enemy"], "Goblin")

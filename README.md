@@ -35,9 +35,16 @@ You can override the endpoint too:
 export DND_LLM_ENDPOINT="http://localhost:8080/v1/chat/completions"
 ```
 
+Qwen thinking is disabled for narration requests so the small token budget is
+spent on the visible DM response rather than hidden reasoning.
+
 If the local model server is unavailable, times out, returns malformed JSON, or
 returns empty text, the game automatically falls back to deterministic narration
-and continues.
+and continues. To see why a fallback happened, run with:
+
+```sh
+export DND_NARRATOR_DEBUG=1
+```
 
 The local model receives only structured facts about events that the Python
 engine has already resolved. The exact deterministic event remains visible, and

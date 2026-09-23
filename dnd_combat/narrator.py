@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from urllib.request import Request, urlopen
 
 
@@ -77,8 +78,11 @@ class LocalLLMNarrator(Narrator):
                     ),
                 },
             ],
-            "temperature": 0.8,
-            "max_tokens": 120,
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 160,
             "stream": False,
         }
 
@@ -103,7 +107,13 @@ class LocalLLMNarrator(Narrator):
             if not content:
                 raise ValueError("Local narrator returned empty content.")
             return f"{plain_text}\nDM: {content}"
-        except Exception:
+        except Exception as error:
+            debug = os.getenv("DND_NARRATOR_DEBUG", "").strip().lower()
+            if debug in {"1", "true", "yes", "on"}:
+                print(
+                    f"[narrator fallback: {type(error).__name__}: {error}]",
+                    file=sys.stderr,
+                )
             return self.fallback.narrate(event, facts, plain_text)
 
 

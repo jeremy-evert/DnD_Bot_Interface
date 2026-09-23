@@ -63,7 +63,7 @@ class NarratorTests(unittest.TestCase):
 
         self.assertEqual(
             text,
-            "The goblin learns a brief lesson about gravity.",
+            "Goblin falls.\nDM: The goblin learns a brief lesson about gravity.",
         )
         self.assertEqual(captured["url"], "http://example.test/v1/chat/completions")
         self.assertEqual(captured["timeout"], 1.25)

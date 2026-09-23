@@ -40,7 +40,8 @@ returns empty text, the game automatically falls back to deterministic narration
 and continues.
 
 The local model receives only structured facts about events that the Python
-engine has already resolved. It may decorate room entry, discovered items,
+engine has already resolved. The exact deterministic event remains visible, and
+Qwen adds a separate `DM:` line beneath it. It may decorate room entry, discovered items,
 attack hits and misses, damage, defeated enemies, player death, and victory.
 It cannot change game state or decide outcomes.
 

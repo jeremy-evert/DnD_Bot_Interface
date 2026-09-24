@@ -35,7 +35,21 @@ echo
 
 PROMPT="Read AGENTS.md first. Then read $MISSION and execute that mission completely. Treat the mission file as the authoritative scope. Inspect the current repository and tests before editing. Do not begin later milestones. Run every validation required by the mission. Commit completed work with a concise milestone message and leave the working tree clean. At the end, report what changed, what tests passed, and any design pressure discovered."
 
-codex exec --full-auto "$PROMPT"
+CODEX_ARGS=(
+  exec
+  -c 'sandbox_mode="workspace-write"'
+  -c 'approval_policy="never"'
+)
+
+if [[ -n "${HANNA_MODEL:-}" ]]; then
+  CODEX_ARGS+=(--model "$HANNA_MODEL")
+  echo "Hanna: model override -> $HANNA_MODEL"
+else
+  echo "Hanna: model -> Codex configured default"
+fi
+
+echo "Hanna: autonomy -> workspace-write, approval_policy=never"
+codex "${CODEX_ARGS[@]}" "$PROMPT"
 
 echo
 echo "Hanna: Codex finished. Current repository status:"

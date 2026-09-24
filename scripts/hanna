@@ -15,8 +15,15 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-echo "Hanna: syncing main..."
+BRANCH="$(git branch --show-current)"
+if [[ -z "$BRANCH" ]]; then
+  echo "Hanna: refusing to run from a detached HEAD." >&2
+  exit 1
+fi
+
+echo "Hanna: syncing $BRANCH..."
 git pull --ff-only
+START_HEAD="$(git rev-parse HEAD)"
 
 if [[ $# -gt 0 ]]; then
   MISSION="$1"
@@ -33,7 +40,7 @@ fi
 echo "Hanna: launching mission -> $MISSION"
 echo
 
-PROMPT="Read AGENTS.md first. Then read $MISSION and execute that mission completely. Treat the mission file as the authoritative scope. Inspect the current repository and tests before editing. Do not begin later milestones. Run every validation required by the mission. Commit completed work with a concise milestone message and leave the working tree clean. At the end, report what changed, what tests passed, and any design pressure discovered."
+PROMPT="Read AGENTS.md first. Then read $MISSION and execute that mission completely. Treat the mission file as the authoritative scope. Inspect the current repository and tests before editing. Do not begin later milestones. Run every validation required by the mission. Commit completed work with a concise milestone message and leave the working tree clean. Do not push; the Hanna wrapper will push only after verifying a clean successful run. At the end, report what changed, what tests passed, and any design pressure discovered."
 
 CODEX_ARGS=(
   exec
@@ -52,6 +59,24 @@ echo "Hanna: autonomy -> workspace-write, approval_policy=never"
 codex "${CODEX_ARGS[@]}" "$PROMPT"
 
 echo
-echo "Hanna: Codex finished. Current repository status:"
-git status --short
+echo "Hanna: Codex finished. Verifying repository state..."
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Hanna: Codex returned with a dirty working tree. Refusing to push." >&2
+  git status --short >&2
+  exit 1
+fi
+
+END_HEAD="$(git rev-parse HEAD)"
+if [[ "$END_HEAD" == "$START_HEAD" ]]; then
+  echo "Hanna: no new commit was created; nothing to push."
+else
+  echo "Hanna: pushing completed mission to origin/$BRANCH..."
+  git push origin "$BRANCH"
+  echo "Hanna: push complete."
+fi
+
+echo
+echo "Hanna: final repository status:"
+git status -sb
 git log -1 --oneline

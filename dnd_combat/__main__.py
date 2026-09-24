@@ -3,108 +3,26 @@
 from __future__ import annotations
 
 from .adventure import HEALING_POTION, Adventure, make_character
-from .combat import AttackResult, Creature, Roller, roll_die
+from .combat import Creature, Roller, roll_die
+from .commands import (
+    resolve_character_command,
+    resolve_combat_command,
+    resolve_exploration_command,
+)
 from .narrator import Narrator, make_narrator
-
-
-def emit(narrator: Narrator, event: str, facts: dict, plain_text: str) -> None:
-    """Render one completed game event without allowing narration to mutate state."""
-    print(narrator.narrate(event, facts, plain_text))
-
-
-def show_status(game: Adventure) -> None:
-    hero = game.hero
-    inventory = ", ".join(hero.inventory) if hero.inventory else "empty"
-    print(
-        f"{hero.name} the {hero.character_class}: "
-        f"{hero.hp}/{hero.max_hp} HP, AC {hero.armor_class}. Inventory: {inventory}."
-    )
-
-
-def room_facts(game: Adventure) -> dict:
-    enemy = game.enemy
-    return {
-        "room": game.room.name,
-        "description": game.room.description,
-        "exits": sorted(game.room.exits),
-        "objects": [
-            {"name": thing.name, "description": thing.description, "takeable": thing.takeable}
-            for thing in game.room.objects
-        ],
-        "enemy": enemy.name if enemy and enemy.alive else None,
-        "defeated_enemy": enemy.name if enemy and not enemy.alive else None,
-        "hero": game.hero.name,
-        "hero_class": game.hero.character_class,
-        "hero_hp": game.hero.hp,
-        "hero_max_hp": game.hero.max_hp,
-        "inventory": list(game.hero.inventory),
-    }
-
-
-def announce_room(game: Adventure, narrator: Narrator) -> None:
-    if game.request_room_object_suggestions():
-        game.add_room_object_suggestions(narrator.suggest_room_objects(room_facts(game)))
-    emit(
-        narrator,
-        "enter_room",
-        room_facts(game),
-        f"{game.room.name}: {game.look()}",
-    )
-    for item in game.room.items:
-        emit(
-            narrator,
-            "item_found",
-            {
-                "room": game.room.name,
-                "item": item,
-                "hero": game.hero.name,
-            },
-            f"You spot {item}.",
-        )
-
-
-def describe_attack(
-    attacker_name: str,
-    defender_name: str,
-    result: AttackResult,
-    hp_before: int,
-    hp_after: int,
-    narrator: Narrator,
-) -> None:
-    if result.hit:
-        plain = (
-            f"{attacker_name} rolls {result.roll} ({result.total}) and hits "
-            f"{defender_name} for {result.damage} damage!"
-        )
-        event = "attack_hit"
-    else:
-        plain = (
-            f"{attacker_name} rolls {result.roll} ({result.total}) and misses "
-            f"{defender_name}."
-        )
-        event = "attack_miss"
-
-    # Attack rolls are deliberately routine: keep them factual and avoid an
-    # LLM call per swing. The narrator remains for room entry and outcomes.
-    print(plain)
+from .session import announce_room
+from .terminal import describe_attack, emit, show_status
 
 
 def choose_character() -> Creature:
     name = input("What is your hero's name? ").strip() or "Hero"
-    aliases = {
-        "f": "fighter",
-        "fighter": "fighter",
-        "r": "rogue",
-        "rogue": "rogue",
-        "w": "wizard",
-        "wizard": "wizard",
-    }
     while True:
         choice = input(
             "Choose a character [F]ighter, [R]ogue, or [W]izard: "
         ).strip().lower()
-        if choice in aliases:
-            return make_character(aliases[choice], name)
+        character = resolve_character_command(choice)
+        if character:
+            return make_character(character, name)
         print("Choose fighter, rogue, or wizard.")
 
 
@@ -127,9 +45,9 @@ def run_combat(
         print(f"{enemy.name}: {enemy.hp}/{enemy.max_hp} HP, AC {enemy.armor_class}.")
 
         if game.combat_turn == "hero":
-            choice = input(
+            choice = resolve_combat_command(input(
                 "Your turn. [A]ttack, [U]se potion, [S]tatus: "
-            ).strip().lower()
+            ).strip())
 
             if choice in {"a", "attack"}:
                 hp_before = enemy.hp
@@ -139,8 +57,6 @@ def run_combat(
                     game.hero.name,
                     enemy.name,
                     result,
-                    hp_before,
-                    enemy.hp,
                     narrator,
                 )
 
@@ -191,8 +107,6 @@ def run_combat(
                 enemy.name,
                 game.hero.name,
                 result,
-                hp_before,
-                game.hero.hp,
                 narrator,
             )
 
@@ -244,9 +158,9 @@ def main(
             print(f"\n{game.room.name}: {game.look()}")
             continue
 
-        choice = input(
+        choice = resolve_exploration_command(input(
             "[M]ove, [L]ook, [S]tatus, [T]ake item, [U]se potion: "
-        ).strip().lower()
+        ).strip())
 
         if choice in {"m", "move"}:
             direction = input("Direction: ").strip().lower()

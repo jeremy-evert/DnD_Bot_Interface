@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-from urllib.request import Request, urlopen
+
+from .llm_adapter import LocalLLMAdapter
 
 
 DEFAULT_ENDPOINT = "http://localhost:8080/v1/chat/completions"
@@ -69,7 +69,7 @@ class LocalLLMNarrator(Narrator):
         self.model = model or os.getenv("DND_LLM_MODEL", DEFAULT_MODEL)
         self.timeout = timeout
         self.fallback = fallback or PlainNarrator()
-        self._urlopen = urlopen_fn or urlopen
+        self.adapter = LocalLLMAdapter(self.endpoint, timeout, urlopen_fn)
 
     def narrate(self, event: str, facts: dict, plain_text: str) -> str:
         payload = {
@@ -96,35 +96,10 @@ class LocalLLMNarrator(Narrator):
             "stream": False,
         }
 
-        request = Request(
-            self.endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        try:
-            response = self._urlopen(request, timeout=self.timeout)
-            try:
-                raw = response.read().decode("utf-8")
-            finally:
-                close = getattr(response, "close", None)
-                if close:
-                    close()
-
-            data = json.loads(raw)
-            content = data["choices"][0]["message"]["content"].strip()
-            if not content:
-                raise ValueError("Local narrator returned empty content.")
+        content = self.adapter.request_content(payload, context="narrator")
+        if content:
             return f"{plain_text}\nDM: {content}"
-        except Exception as error:
-            debug = os.getenv("DND_NARRATOR_DEBUG", "").strip().lower()
-            if debug in {"1", "true", "yes", "on"}:
-                print(
-                    f"[narrator fallback: {type(error).__name__}: {error}]",
-                    file=sys.stderr,
-                )
-            return self.fallback.narrate(event, facts, plain_text)
+        return self.fallback.narrate(event, facts, plain_text)
 
     def suggest_room_objects(self, facts: dict) -> list[dict]:
         """Ask the local model once for JSON scenery, failing closed on any error."""
@@ -141,26 +116,9 @@ class LocalLLMNarrator(Narrator):
             "max_tokens": 180,
             "stream": False,
         }
-        request = Request(
-            self.endpoint, data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        try:
-            response = self._urlopen(request, timeout=self.timeout)
-            try:
-                raw = response.read().decode("utf-8")
-            finally:
-                close = getattr(response, "close", None)
-                if close:
-                    close()
-            content = json.loads(raw)["choices"][0]["message"]["content"].strip()
-            objects = json.loads(content)["objects"]
-            return objects if isinstance(objects, list) else []
-        except Exception as error:
-            debug = os.getenv("DND_NARRATOR_DEBUG", "").strip().lower()
-            if debug in {"1", "true", "yes", "on"}:
-                print(f"[room-object fallback: {type(error).__name__}: {error}]", file=sys.stderr)
-            return []
+        data = self.adapter.request_json(payload, context="room-object", fallback={})
+        objects = data.get("objects") if isinstance(data, dict) else None
+        return objects if isinstance(objects, list) else []
 
 
 def make_narrator() -> Narrator:

@@ -1,4 +1,4 @@
-"""Deterministic adventure rules, independent of terminal input and output."""
+"""Deterministic game rules, independent of commands and presentation."""
 
 from __future__ import annotations
 
@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 import re
 
 from .combat import AttackResult, Creature, Roller, attack, roll_die, roll_initiative
-
-
-HEALING_POTION = "healing potion"
+from .matching import DeterministicMatcher, MatchCandidate
+from .world import HEALING_POTION, Room, RoomObject, make_character, make_dungeon
 _SAFE_OBJECT_NAME = re.compile(r"^[a-z][a-z' -]{1,48}$")
 _FORBIDDEN_OBJECT_WORDS = {
     "armor", "bonus", "coin", "damage", "enemy", "exit", "gold", "heal",
@@ -17,84 +16,13 @@ _FORBIDDEN_OBJECT_WORDS = {
 }
 
 DIRECTION_ALIASES = {
-    "north": "north", "n": "north",
-    "south": "south", "s": "south",
-    "east": "east", "e": "east",
-    "west": "west", "w": "west",
+    "north": "north", "n": "north", "south": "south", "s": "south",
+    "east": "east", "e": "east", "west": "west", "w": "west",
 }
-
-
-@dataclass
-class RoomObject:
-    """A persistent, factual thing in a room.
-
-    Only deterministic content may be takeable. LLM-created objects are always
-    scenery, so accepting one can never alter rules, rewards, or progression.
-    """
-
-    name: str
-    description: str
-    takeable: bool = False
-    aliases: tuple[str, ...] = ()
-
-
-@dataclass
-class Room:
-    """One room in the small, connected dungeon."""
-
-    name: str
-    description: str
-    exits: dict[str, str]
-    objects: list[RoomObject] = field(default_factory=list)
-    enemy: Creature | None = None
-    encounter_started: bool = False
-    loot_dropped: bool = False
-    object_suggestions_requested: bool = False
-
-    @property
-    def items(self) -> list[str]:
-        """Compatibility view of the room's takeable objects."""
-        return [thing.name for thing in self.objects if thing.takeable]
-
-
-def make_character(choice: str, name: str) -> Creature:
-    """Create one of the three fixed 0.2 player characters."""
-    choices = {
-        "fighter": (24, 16, 5, 10, 3, 1),
-        "rogue": (18, 14, 5, 8, 3, 4),
-        "wizard": (14, 12, 5, 10, 2, 3),
-    }
-    try:
-        hp, armor_class, attack_bonus, damage_die, damage_bonus, initiative_bonus = choices[choice.lower()]
-    except KeyError as error:
-        raise ValueError(f"Unknown character choice: {choice}") from error
-    return Creature(name, hp, armor_class, attack_bonus, damage_die, damage_bonus, initiative_bonus, character_class=choice.title())
-
-
-def make_hobgoblin() -> Creature:
-    """Create the final, tougher encounter."""
-    return Creature("Hobgoblin Captain", 18, 14, 5, 8, 2, 3)
-
-
-def make_dungeon() -> dict[str, Room]:
-    """Create the fixed three-room adventure."""
-    from .combat import make_goblin
-
-    return {
-        "entry": Room(
-            "Mossy Entry", "A damp stone entryway opens onto a passage east.", {"east": "stores"},
-            enemy=make_goblin(),
-        ),
-        "stores": Room(
-            "Forgotten Stores", "Broken crates fill a quiet storeroom. A passage continues east.",
-            {"west": "entry", "east": "sanctum"},
-            [RoomObject(HEALING_POTION, "A stoppered vial of red liquid.", True)],
-        ),
-        "sanctum": Room(
-            "Captain's Sanctum", "A scarred chamber has a passage west.", {"west": "stores"},
-            enemy=make_hobgoblin(),
-        ),
-    }
+_DIRECTION_MATCHER = DeterministicMatcher(
+    MatchCandidate(direction, direction, (short,))
+    for short, direction in (("n", "north"), ("s", "south"), ("e", "east"), ("w", "west"))
+)
 
 
 @dataclass
@@ -138,7 +66,7 @@ class Adventure:
     def move(self, direction: str) -> tuple[bool, str]:
         if self.in_combat:
             return False, "Defeat the enemy before moving on."
-        canonical_direction = DIRECTION_ALIASES.get(direction.strip().lower())
+        canonical_direction = _DIRECTION_MATCHER.match(direction)
         destination = self.room.exits.get(canonical_direction) if canonical_direction else None
         if destination is None:
             return False, "There is no exit that way."
@@ -154,11 +82,16 @@ class Adventure:
             if takeable:
                 return False, "Takeable objects: " + ", ".join(thing.name for thing in takeable) + "."
             return False, "There is nothing takeable here."
-        for thing in takeable:
-            if requested == thing.name.lower() or requested in thing.aliases:
-                self.room.objects.remove(thing)
-                self.hero.inventory.append(thing.name)
-                return True, f"You take the {thing.name}."
+        matcher = DeterministicMatcher(
+            MatchCandidate(thing, thing.name, thing.aliases) for thing in self.room.objects
+        )
+        thing = matcher.match(requested)
+        if thing is not None:
+            if not thing.takeable:
+                return False, f"The {thing.name} cannot be taken."
+            self.room.objects.remove(thing)
+            self.hero.inventory.append(thing.name)
+            return True, f"You take the {thing.name}."
         return False, f"There is no takeable {item} here."
 
     def request_room_object_suggestions(self) -> bool:

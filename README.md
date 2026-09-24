@@ -1,8 +1,8 @@
 # DnD_Bot_Interface
 
-## Play D&D 0.4: The Mossy Delve
+## Play D&D 0.5: The Mossy Delve
 
-D&D 0.4 keeps the deterministic Python game engine in charge of rules, dice,
+D&D 0.5 keeps the deterministic Python game engine in charge of rules, dice,
 HP, inventory, movement, loot, victory, death, and persistent room objects. An
 optional local LLM can narrate high-value events and, once per room's first
 entry, suggest mundane scenery as structured JSON. Python validates every
@@ -68,9 +68,23 @@ python3 -m unittest discover -v
 
 No third-party Python packages are required for the game or narrator client.
 
+### 0.5 architecture checkpoint
+
+The three-room map and game rules are unchanged. The code now separates
+persistent world state (`world.py`), deterministic rules (`adventure.py`),
+player command matching (`matching.py` and `commands.py`), terminal rendering
+(`terminal.py`), and local LLM transport/JSON extraction (`llm_adapter.py`).
+`session.py` coordinates those boundaries; `narrator.py` only defines narration
+prompts and presentation policy. Python
+validates any LLM scenery proposal before it reaches the world.
+
+Object and command matching is deterministic: exact names, explicit aliases,
+and only unique word subsets resolve. Thus `ring`, `potion`, and `healing` can
+identify their respective unique objects, while ambiguous phrases fail safely.
+
 ## Project status
 
-Current milestone: D&D 0.4, a terminal adventure with persistent room objects
+Current milestone: D&D 0.5, a terminal adventure with persistent room objects
 and an optional local Qwen-compatible narrator. The engine remains deterministic and authoritative.
 There is still no GUI, agent framework, database, or voice layer.
 

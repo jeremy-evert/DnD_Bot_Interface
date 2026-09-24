@@ -118,6 +118,13 @@ class NarratorTests(unittest.TestCase):
             [],
         )
 
+    def test_local_narrator_adapter_extracts_fenced_structured_json(self):
+        narrator = LocalLLMNarrator(
+            urlopen_fn=lambda request, timeout: FakeResponse({"choices": [{"message": {"content": "```json\n{\"objects\": [{\"name\": \"cracked lantern\", \"description\": \"A soot-darkened lantern.\"}]}\n```"}}]})
+        )
+
+        self.assertEqual(narrator.suggest_room_objects({})[0]["name"], "cracked lantern")
+
     def test_make_narrator_is_plain_by_default_and_local_when_requested(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsInstance(make_narrator(), PlainNarrator)

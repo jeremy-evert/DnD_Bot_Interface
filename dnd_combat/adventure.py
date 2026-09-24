@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 from .combat import AttackResult, Creature, Roller, attack, roll_die, roll_initiative
 
 
 HEALING_POTION = "healing potion"
+_SAFE_OBJECT_NAME = re.compile(r"^[a-z][a-z' -]{1,48}$")
+_FORBIDDEN_OBJECT_WORDS = {
+    "armor", "bonus", "coin", "damage", "enemy", "exit", "gold", "heal",
+    "healing", "key", "loot", "map", "monster", "potion", "reward", "spell",
+    "weapon",
+}
 
 DIRECTION_ALIASES = {
     "north": "north", "n": "north",
@@ -18,16 +25,36 @@ DIRECTION_ALIASES = {
 
 
 @dataclass
+class RoomObject:
+    """A persistent, factual thing in a room.
+
+    Only deterministic content may be takeable. LLM-created objects are always
+    scenery, so accepting one can never alter rules, rewards, or progression.
+    """
+
+    name: str
+    description: str
+    takeable: bool = False
+    aliases: tuple[str, ...] = ()
+
+
+@dataclass
 class Room:
     """One room in the small, connected dungeon."""
 
     name: str
     description: str
     exits: dict[str, str]
-    items: list[str] = field(default_factory=list)
+    objects: list[RoomObject] = field(default_factory=list)
     enemy: Creature | None = None
     encounter_started: bool = False
     loot_dropped: bool = False
+    object_suggestions_requested: bool = False
+
+    @property
+    def items(self) -> list[str]:
+        """Compatibility view of the room's takeable objects."""
+        return [thing.name for thing in self.objects if thing.takeable]
 
 
 def make_character(choice: str, name: str) -> Creature:
@@ -58,7 +85,11 @@ def make_dungeon() -> dict[str, Room]:
             "Mossy Entry", "A damp stone entryway opens onto a passage east.", {"east": "stores"},
             enemy=make_goblin(),
         ),
-        "stores": Room("Forgotten Stores", "Broken crates fill a quiet storeroom. A passage continues east.", {"west": "entry", "east": "sanctum"}, [HEALING_POTION]),
+        "stores": Room(
+            "Forgotten Stores", "Broken crates fill a quiet storeroom. A passage continues east.",
+            {"west": "entry", "east": "sanctum"},
+            [RoomObject(HEALING_POTION, "A stoppered vial of red liquid.", True)],
+        ),
         "sanctum": Room(
             "Captain's Sanctum", "A scarred chamber has a passage west.", {"west": "stores"},
             enemy=make_hobgoblin(),
@@ -95,8 +126,12 @@ class Adventure:
                 details.append(f"A {self.enemy.name.lower()} is here.")
             else:
                 details.append(f"The {self.enemy.name.lower()} lies defeated.")
-        if self.room.items:
-            details.append("You see: " + ", ".join(self.room.items) + ".")
+        if self.room.objects:
+            details.append(
+                "You see: " + "; ".join(
+                    f"{thing.name} ({thing.description})" for thing in self.room.objects
+                ) + "."
+            )
         details.append("Exits: " + ", ".join(sorted(self.room.exits)) + ".")
         return " ".join(details)
 
@@ -111,12 +146,55 @@ class Adventure:
         self.combat_turn = None
         return True, f"You enter {self.room.name}."
 
-    def take_item(self, item: str) -> tuple[bool, str]:
-        if item not in self.room.items:
-            return False, f"There is no {item} here."
-        self.room.items.remove(item)
-        self.hero.inventory.append(item)
-        return True, f"You take the {item}."
+    def take_item(self, item: str = "") -> tuple[bool, str]:
+        """Take a deterministic, takeable room object by name or alias."""
+        requested = item.strip().lower()
+        takeable = [thing for thing in self.room.objects if thing.takeable]
+        if not requested:
+            if takeable:
+                return False, "Takeable objects: " + ", ".join(thing.name for thing in takeable) + "."
+            return False, "There is nothing takeable here."
+        for thing in takeable:
+            if requested == thing.name.lower() or requested in thing.aliases:
+                self.room.objects.remove(thing)
+                self.hero.inventory.append(thing.name)
+                return True, f"You take the {thing.name}."
+        return False, f"There is no takeable {item} here."
+
+    def request_room_object_suggestions(self) -> bool:
+        """Claim a room's one first-entry suggestion opportunity."""
+        if self.room.object_suggestions_requested:
+            return False
+        self.room.object_suggestions_requested = True
+        return True
+
+    def add_room_object_suggestions(self, suggestions: object) -> list[RoomObject]:
+        """Strictly accept only harmless, structured LLM scenery suggestions."""
+        if not isinstance(suggestions, list):
+            return []
+        accepted: list[RoomObject] = []
+        existing = {thing.name.lower() for thing in self.room.objects}
+        for suggestion in suggestions[:3]:
+            if not isinstance(suggestion, dict) or set(suggestion) != {"name", "description"}:
+                continue
+            name, description = suggestion["name"], suggestion["description"]
+            if not isinstance(name, str) or not isinstance(description, str):
+                continue
+            name, description = name.strip().lower(), description.strip()
+            words = set(re.findall(r"[a-z]+", f"{name} {description}".lower()))
+            if (
+                not _SAFE_OBJECT_NAME.fullmatch(name)
+                or not 3 <= len(description) <= 160
+                or "\n" in description
+                or words & _FORBIDDEN_OBJECT_WORDS
+                or name in existing
+            ):
+                continue
+            object_ = RoomObject(name, description)
+            self.room.objects.append(object_)
+            accepted.append(object_)
+            existing.add(name)
+        return accepted
 
     def use_healing_potion(self) -> tuple[bool, int]:
         if HEALING_POTION not in self.hero.inventory:
@@ -178,6 +256,10 @@ class Adventure:
         """Move an enemy's carried items to its room exactly once."""
         if self.room.loot_dropped or self.enemy is None:
             return
-        self.room.items.extend(self.enemy.inventory)
+        self.room.objects.extend(
+            RoomObject(item, f"Taken from the defeated {self.enemy.name.lower()}.", True,
+                       ("ring",) if item == "goblin's brass ring" else ())
+            for item in self.enemy.inventory
+        )
         self.enemy.inventory.clear()
         self.room.loot_dropped = True

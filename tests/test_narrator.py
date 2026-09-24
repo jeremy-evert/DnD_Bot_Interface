@@ -98,6 +98,26 @@ class NarratorTests(unittest.TestCase):
             "Hero misses.",
         )
 
+    def test_local_narrator_requests_structured_room_objects_and_fails_closed(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse({"choices": [{"message": {"content": json.dumps({
+                "objects": [{"name": "cracked lantern", "description": "A soot-darkened lantern."}]
+            })}}]})
+
+        narrator = LocalLLMNarrator(urlopen_fn=fake_urlopen)
+        objects = narrator.suggest_room_objects({"room": "Mossy Entry", "exits": ["east"]})
+
+        self.assertEqual(objects[0]["name"], "cracked lantern")
+        self.assertIn("mundane, non-takeable scenery", captured["payload"]["messages"][0]["content"])
+        self.assertEqual(captured["payload"]["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(
+            LocalLLMNarrator(urlopen_fn=lambda *args, **kwargs: (_ for _ in ()).throw(OSError())).suggest_room_objects({}),
+            [],
+        )
+
     def test_make_narrator_is_plain_by_default_and_local_when_requested(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsInstance(make_narrator(), PlainNarrator)

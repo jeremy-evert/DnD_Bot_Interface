@@ -28,12 +28,22 @@ Rules:
 - Keep the tone vivid, playful, and concise.
 """
 
+ROOM_OBJECT_PROMPT = """Suggest up to three mundane, non-takeable scenery objects for this room.
+Return JSON only: {"objects":[{"name":"lowercase short name","description":"plain factual description"}]}.
+Never suggest people, creatures, enemies, exits, rewards, treasure, currency, maps, keys,
+weapons, armor, potions, healing, spells, bonuses, mechanics, or anything takeable.
+The Python engine will reject invalid suggestions; do not add commentary."""
+
 
 class Narrator:
     """Presentation-only boundary for game narration."""
 
     def narrate(self, event: str, facts: dict, plain_text: str) -> str:
         raise NotImplementedError
+
+    def suggest_room_objects(self, facts: dict) -> list[dict]:
+        """Optionally propose structured scenery; never mutate game state."""
+        return []
 
 
 class PlainNarrator(Narrator):
@@ -115,6 +125,42 @@ class LocalLLMNarrator(Narrator):
                     file=sys.stderr,
                 )
             return self.fallback.narrate(event, facts, plain_text)
+
+    def suggest_room_objects(self, facts: dict) -> list[dict]:
+        """Ask the local model once for JSON scenery, failing closed on any error."""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": ROOM_OBJECT_PROMPT},
+                {"role": "user", "content": json.dumps(facts, sort_keys=True)},
+            ],
+            "temperature": 0.4,
+            "top_p": 0.8,
+            "top_k": 20,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 180,
+            "stream": False,
+        }
+        request = Request(
+            self.endpoint, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            response = self._urlopen(request, timeout=self.timeout)
+            try:
+                raw = response.read().decode("utf-8")
+            finally:
+                close = getattr(response, "close", None)
+                if close:
+                    close()
+            content = json.loads(raw)["choices"][0]["message"]["content"].strip()
+            objects = json.loads(content)["objects"]
+            return objects if isinstance(objects, list) else []
+        except Exception as error:
+            debug = os.getenv("DND_NARRATOR_DEBUG", "").strip().lower()
+            if debug in {"1", "true", "yes", "on"}:
+                print(f"[room-object fallback: {type(error).__name__}: {error}]", file=sys.stderr)
+            return []
 
 
 def make_narrator() -> Narrator:

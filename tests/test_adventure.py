@@ -1,6 +1,8 @@
 import unittest
 
-from dnd_combat.adventure import DIRECTION_ALIASES, HEALING_POTION, Adventure, make_character
+from dnd_combat.adventure import (
+    DIRECTION_ALIASES, HEALING_POTION, Adventure, RoomObject, make_character,
+)
 
 
 class FixedRoller:
@@ -122,6 +124,45 @@ class AdventureTests(unittest.TestCase):
         self.assertEqual(healed, 0)
         self.assertEqual(game.hero.hp, starting_hp)
         self.assertEqual(game.combat_turn, "hero")
+
+    def test_look_describes_persistent_room_objects_and_take_without_target_lists_loot(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].objects.append(
+            RoomObject("mossy bench", "A low stone bench slick with moss.")
+        )
+        game.rooms["entry"].enemy.hp = 0
+
+        self.assertIn("mossy bench (A low stone bench slick with moss.)", game.look())
+        self.assertEqual(game.take_item(), (False, "There is nothing takeable here."))
+        game.move("east")
+        self.assertEqual(
+            game.take_item(), (False, "Takeable objects: healing potion.")
+        )
+
+    def test_take_accepts_deterministic_ring_alias(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.start_encounter(FixedRoller(20, 1))
+        game.player_attack(FixedRoller(20, 10))
+
+        self.assertEqual(game.take_item("ring"), (True, "You take the goblin's brass ring."))
+        self.assertIn("goblin's brass ring", game.hero.inventory)
+
+    def test_room_object_suggestions_are_strictly_validated_and_persist(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        accepted = game.add_room_object_suggestions([
+            {"name": "cracked lantern", "description": "An old lantern with a smoke-blackened chimney."},
+            {"name": "magic key", "description": "A key that opens the eastern exit."},
+            {"name": "dusty map", "description": "A map that reveals treasure."},
+            {"name": "rope", "description": "A rope.", "takeable": False},
+        ])
+
+        self.assertEqual([thing.name for thing in accepted], ["cracked lantern"])
+        self.assertFalse(accepted[0].takeable)
+        self.assertIn("cracked lantern", game.look())
+        game.rooms["entry"].enemy.hp = 0
+        game.move("east")
+        game.move("west")
+        self.assertIn("cracked lantern", game.look())
 
 
 if __name__ == "__main__":

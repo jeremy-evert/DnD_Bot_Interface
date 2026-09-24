@@ -27,7 +27,10 @@ def room_facts(game: Adventure) -> dict:
         "room": game.room.name,
         "description": game.room.description,
         "exits": sorted(game.room.exits),
-        "items": list(game.room.items),
+        "objects": [
+            {"name": thing.name, "description": thing.description, "takeable": thing.takeable}
+            for thing in game.room.objects
+        ],
         "enemy": enemy.name if enemy and enemy.alive else None,
         "defeated_enemy": enemy.name if enemy and not enemy.alive else None,
         "hero": game.hero.name,
@@ -39,6 +42,8 @@ def room_facts(game: Adventure) -> dict:
 
 
 def announce_room(game: Adventure, narrator: Narrator) -> None:
+    if game.request_room_object_suggestions():
+        game.add_room_object_suggestions(narrator.suggest_room_objects(room_facts(game)))
     emit(
         narrator,
         "enter_room",
@@ -79,21 +84,9 @@ def describe_attack(
         )
         event = "attack_miss"
 
-    emit(
-        narrator,
-        event,
-        {
-            "attacker": attacker_name,
-            "defender": defender_name,
-            "roll": result.roll,
-            "total": result.total,
-            "hit": result.hit,
-            "damage": result.damage,
-            "defender_hp_before": hp_before,
-            "defender_hp_after": hp_after,
-        },
-        plain,
-    )
+    # Attack rolls are deliberately routine: keep them factual and avoid an
+    # LLM call per swing. The narrator remains for room entry and outcomes.
+    print(plain)
 
 
 def choose_character() -> Creature:

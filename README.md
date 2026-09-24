@@ -1,10 +1,13 @@
 # DnD_Bot_Interface
 
-## Play D&D 0.3: The Mossy Delve
+## Play D&D 0.4: The Mossy Delve
 
-D&D 0.3 keeps the deterministic Python game engine in charge of rules, dice,
-HP, inventory, movement, loot, victory, and death. An optional local LLM can now
-act as a presentation-only narrator for completed game events.
+D&D 0.4 keeps the deterministic Python game engine in charge of rules, dice,
+HP, inventory, movement, loot, victory, death, and persistent room objects. An
+optional local LLM can narrate high-value events and, once per room's first
+entry, suggest mundane scenery as structured JSON. Python validates every
+suggestion before it becomes persistent state; suggestions are never takeable
+and cannot add mechanics, exits, enemies, rewards, or game facts.
 
 Plain deterministic mode remains the default:
 
@@ -48,13 +51,13 @@ export DND_NARRATOR_DEBUG=1
 
 The local model receives only structured facts about events that the Python
 engine has already resolved. The exact deterministic event remains visible, and
-Qwen adds a separate `DM:` line beneath it. It may decorate room entry, discovered items,
-attack hits and misses, damage, defeated enemies, player death, and victory.
-It cannot change game state or decide outcomes.
+Qwen adds a separate `DM:` line beneath it. Routine attack rolls stay factual
+and do not cause LLM calls; narration is reserved for room entry and outcomes.
 
 Outside combat, use `move`, `look`, and `status` (or their prompted initials).
 Directions accept `north`/`n`, `south`/`s`, `east`/`e`, and `west`/`w`. Use
-`take` to collect visible loot and `use` to drink a healing potion. In combat,
+`take` with a blank target to list takeable objects; `ring` is an alias for the
+goblin's brass ring. Use `use` to drink a healing potion. In combat,
 choose `attack`, `use potion`, or `status`.
 
 Run the full deterministic test suite with:
@@ -67,8 +70,8 @@ No third-party Python packages are required for the game or narrator client.
 
 ## Project status
 
-Current milestone: D&D 0.3, a terminal adventure with an optional local
-Qwen-compatible narrator. The engine remains deterministic and authoritative.
+Current milestone: D&D 0.4, a terminal adventure with persistent room objects
+and an optional local Qwen-compatible narrator. The engine remains deterministic and authoritative.
 There is still no GUI, agent framework, database, or voice layer.
 
 ---

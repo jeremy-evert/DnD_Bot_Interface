@@ -8,7 +8,7 @@ The early prompts were originally issued conversationally and were not committed
 
 `CURRENT` points to the prompt launched by `../scripts/hanna`.
 
-Current target: **D&D 0.5 refactor checkpoint**.
+Current target: **D&D 0.6 map expansion**.
 
 ## Milestones
 

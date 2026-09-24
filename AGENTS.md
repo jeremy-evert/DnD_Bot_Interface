@@ -47,8 +47,8 @@ Historical prompt files labeled **reconstructed** preserve intent from the actua
 ## Current sequence
 
 1. D&D 0.4 persistent room objects — complete and human-playtested.
-2. D&D 0.5 refactor checkpoint — current mission.
-3. D&D 0.6 map expansion — only after the refactor is complete and green.
+2. D&D 0.5 refactor checkpoint — complete and green.
+3. D&D 0.6 map expansion — current mission.
 
 ## Before editing
 

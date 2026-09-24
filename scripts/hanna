@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$ROOT" ]]; then
+  echo "Hanna: run me from inside the DnD_Bot_Interface repository." >&2
+  exit 1
+fi
+cd "$ROOT"
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Hanna: refusing to launch Codex from a dirty working tree." >&2
+  echo "Commit, stash, or discard the current changes first." >&2
+  git status --short >&2
+  exit 1
+fi
+
+echo "Hanna: syncing main..."
+git pull --ff-only
+
+if [[ $# -gt 0 ]]; then
+  MISSION="$1"
+else
+  CURRENT="$(tr -d '\r\n' < prompts/CURRENT)"
+  MISSION="prompts/$CURRENT"
+fi
+
+if [[ ! -f "$MISSION" ]]; then
+  echo "Hanna: mission file not found: $MISSION" >&2
+  exit 1
+fi
+
+echo "Hanna: launching mission -> $MISSION"
+echo
+
+PROMPT="Read AGENTS.md first. Then read $MISSION and execute that mission completely. Treat the mission file as the authoritative scope. Inspect the current repository and tests before editing. Do not begin later milestones. Run every validation required by the mission. Commit completed work with a concise milestone message and leave the working tree clean. At the end, report what changed, what tests passed, and any design pressure discovered."
+
+codex exec --full-auto "$PROMPT"
+
+echo
+echo "Hanna: Codex finished. Current repository status:"
+git status --short
+git log -1 --oneline

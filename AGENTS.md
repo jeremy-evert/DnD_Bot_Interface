@@ -36,6 +36,23 @@ The LLM must never directly mutate game state.
 - Do not expand later milestones early.
 - Human playtests are design evidence. Preserve the behavior they reveal rather than polishing around it blindly.
 
+## Design north star
+
+The long-term research question is:
+
+> Can a small artificial world make the player genuinely curious about what happens next?
+
+Prefer systems that increase agency, uncertainty, persistent consequence, discovery, meaningful failure, identity, pacing, and surprise over systems that merely increase prose volume.
+
+The strongest world behavior is often simple:
+
+> The player did something. The world remembers. That memory matters later.
+
+Use `docs/PLAY_DESIGN.md` when evaluating whether a feature is likely to improve play.
+Use `docs/REMOTE_LLM_ARCHITECTURE.md` when experimenting with remote inference.
+
+These documents are design references, not permission to skip the current milestone.
+
 ## Prompt archive
 
 Milestone prompts live in `prompts/`.
@@ -46,9 +63,9 @@ Historical prompt files labeled **reconstructed** preserve intent from the actua
 
 ## Current sequence
 
-1. D&D 0.4 persistent room objects — complete and human-playtested.
-2. D&D 0.5 refactor checkpoint — complete and green.
-3. D&D 0.6 map expansion — current mission.
+1. D&D 0.4 persistent room objects - complete and human-playtested.
+2. D&D 0.5 refactor checkpoint - complete and green.
+3. D&D 0.6 map expansion - current mission.
 
 ## Before editing
 

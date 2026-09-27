@@ -1,11 +1,15 @@
 """A deterministic, scripted playthrough of the terminal interface."""
 
 import io
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from dnd_combat.__main__ import main
-from dnd_combat.narrator import PlainNarrator
+from dnd_combat.narrator import Narrator, PlainNarrator
+from dnd_combat.session_log import RecordingNarrator as SessionNarrator, SessionRecorder
 
 
 class FixedRoller:
@@ -41,13 +45,19 @@ class TerminalSmokeTests(unittest.TestCase):
         commands = [
             "Arin", "fighter", "attack",
             "move", "e", "take", "healing potion", "move", "east",
+            "move", "north", "move", "east", "move", "east",
             "attack", "attack",
         ]
         output = io.StringIO()
         narrator = RecordingNarrator()
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "smoke.jsonl")
 
-        with patch("builtins.input", side_effect=commands), patch("sys.stdout", output):
-            main(roller, narrator)
+            with patch("builtins.input", side_effect=commands), patch("sys.stdout", output):
+                main(roller, narrator, recorder)
+
+            report = SessionRecorder.report(recorder.path)
+            raw_log = recorder.path.read_text(encoding="utf-8")
 
         self.assertIn("Victory!", output.getvalue())
         self.assertIn("enter_room", narrator.events)
@@ -55,6 +65,10 @@ class TerminalSmokeTests(unittest.TestCase):
         self.assertIn("enemy_defeated", narrator.events)
         self.assertIn("item_found", narrator.events)
         self.assertIn("victory", narrator.events)
+        self.assertIn("Route:", report)
+        self.assertIn("Hollow Vault", report)
+        self.assertIn('"d20": 20', raw_log)
+        self.assertIn('"event": "session_ended"', raw_log)
 
     def test_room_suggestions_are_requested_once_per_room_and_visible_after_return(self):
         from dnd_combat.adventure import Adventure, make_character
@@ -75,6 +89,74 @@ class TerminalSmokeTests(unittest.TestCase):
         self.assertEqual(narrator.suggestion_calls, 2)
         self.assertEqual(len([thing for thing in game.rooms["entry"].objects if thing.name == "cracked lantern"]), 1)
         self.assertIn("cracked lantern", output.getvalue())
+
+    def test_unknown_terminal_attempt_is_recorded_in_report(self):
+        from dnd_combat.adventure import Adventure, make_character
+
+        game = Adventure(make_character("fighter", "Arin"))
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "attempt.jsonl")
+            recorder.input("cast portal", game, outcome="unrecognized command")
+
+            report = SessionRecorder.report(recorder.path)
+
+        self.assertIn("cast portal", report)
+        self.assertIn("unrecognized", report)
+
+    def test_recorder_captures_narrator_response_and_validates_object_proposals(self):
+        from dnd_combat.adventure import Adventure, make_character
+        from dnd_combat.__main__ import announce_room
+
+        class FakeLocalNarrator(Narrator):
+            adapter = object()
+            model = "test-model"
+
+            def narrate(self, event, facts, plain_text):
+                return f"{plain_text}\nDM: The damp air smells of iron."
+
+            def suggest_room_objects(self, facts):
+                return [
+                    {"name": "iron nail", "description": "A bent nail rests in the dust."},
+                    {"name": "magic key", "description": "A key opens a secret door."},
+                ]
+
+        game = Adventure(make_character("fighter", "Arin"))
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "llm.jsonl")
+            narrator = SessionNarrator(FakeLocalNarrator(), recorder)
+            with patch("sys.stdout", io.StringIO()):
+                announce_room(game, narrator, recorder)
+            report_events = [
+                json.loads(line)
+                for line in recorder.path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        narration = next(event for event in report_events if event["event"] == "narration")
+        suggestion = next(event for event in report_events if event["event"] == "room_suggestion")
+        self.assertEqual(narration["category"], "enter_room")
+        self.assertEqual(narration["model"], "test-model")
+        self.assertIn("smells of iron", narration["response"])
+        self.assertEqual(suggestion["accepted"], ["iron nail"])
+        self.assertEqual(suggestion["rejected_count"], 1)
+
+    def test_recorder_marks_unavailable_local_narration_as_fallback(self):
+        from dnd_combat.session_log import RecordingNarrator as SessionNarrator
+
+        class FailedLocalNarrator(Narrator):
+            adapter = object()
+
+            def narrate(self, event, facts, plain_text):
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "fallback.jsonl")
+            narrator = SessionNarrator(FailedLocalNarrator(), recorder)
+            narrator.narrate("enter_room", {}, "A quiet room.")
+            event = json.loads(recorder.path.read_text(encoding="utf-8"))
+
+        self.assertTrue(event["llm"])
+        self.assertTrue(event["fallback"])
+        self.assertGreaterEqual(event["latency_ms"], 0)
 
 
 if __name__ == "__main__":

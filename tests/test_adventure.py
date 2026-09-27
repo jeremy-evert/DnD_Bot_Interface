@@ -25,15 +25,48 @@ class AdventureTests(unittest.TestCase):
         self.assertNotEqual((fighter.hp, fighter.armor_class, fighter.attack_bonus, fighter.damage_die, fighter.damage_bonus, fighter.initiative_bonus), (rogue.hp, rogue.armor_class, rogue.attack_bonus, rogue.damage_die, rogue.damage_bonus, rogue.initiative_bonus))
         self.assertNotEqual((rogue.hp, rogue.armor_class, rogue.attack_bonus, rogue.damage_die, rogue.damage_bonus, rogue.initiative_bonus), (wizard.hp, wizard.armor_class, wizard.attack_bonus, wizard.damage_die, wizard.damage_bonus, wizard.initiative_bonus))
 
-    def test_dungeon_has_three_connected_rooms_and_persistent_inventory(self):
+    def test_dungeon_has_ten_connected_rooms_and_persistent_inventory(self):
         game = Adventure(make_character("fighter", "Arin"))
-        self.assertEqual(set(game.rooms), {"entry", "stores", "sanctum"})
+        self.assertEqual(len(game.rooms), 10)
+        for room in game.rooms.values():
+            for destination in room.exits.values():
+                self.assertIn(destination, game.rooms)
         game.rooms["entry"].enemy.hp = 0  # Clear the first encounter for movement-rule testing.
         self.assertTrue(game.move("east")[0])
         self.assertIn(HEALING_POTION, game.room.items)
         self.assertTrue(game.take_item(HEALING_POTION)[0])
         self.assertTrue(game.move("west")[0])
         self.assertIn(HEALING_POTION, game.hero.inventory)
+
+    def test_mira_reacts_to_carried_ring_and_opens_persistent_shortcut(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.hero.inventory.append("goblin's brass ring")
+        game.move("east")
+        game.move("east")
+        game.move("north")
+
+        interacted, response = game.talk("Mira")
+
+        self.assertTrue(interacted)
+        self.assertIn("recognizes the brass ring", response)
+        self.assertEqual(game.room.exits["west"], "sanctum")
+        self.assertTrue(game.vault_opened)
+        game.move("west")
+        self.assertEqual(game.current_room_id, "sanctum")
+
+    def test_gallery_npc_hints_at_ring_when_player_has_not_found_it(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.move("east")
+        game.move("east")
+        game.move("north")
+
+        interacted, response = game.talk()
+
+        self.assertTrue(interacted)
+        self.assertIn("brass ring", response)
+        self.assertNotIn("west", game.room.exits)
 
     def test_direction_aliases_move_between_rooms(self):
         game = Adventure(make_character("fighter", "Arin"))
@@ -97,6 +130,9 @@ class AdventureTests(unittest.TestCase):
         self.assertGreater(final_enemy.armor_class, first_enemy.armor_class)
 
         game.rooms["entry"].enemy.hp = 0
+        game.move("east")
+        game.move("east")
+        game.move("north")
         game.move("east")
         game.move("east")
         game.start_encounter(FixedRoller(20, 1))

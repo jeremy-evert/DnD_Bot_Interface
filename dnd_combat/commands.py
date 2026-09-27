@@ -12,6 +12,7 @@ EXPLORATION_COMMANDS = DeterministicMatcher(
         MatchCandidate("status", "status", ("s",)),
         MatchCandidate("take", "take", ("t",)),
         MatchCandidate("use", "use", ("u", "use potion")),
+        MatchCandidate("talk", "talk", ("k", "speak")),
     )
 )
 

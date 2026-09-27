@@ -37,5 +37,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_command_boundary_uses_the_same_deterministic_matching(self):
         self.assertEqual(resolve_exploration_command("M"), "move")
+        self.assertEqual(resolve_exploration_command("k"), "talk")
+        self.assertEqual(resolve_exploration_command("talk"), "talk")
         self.assertEqual(resolve_combat_command("use potion"), "use")
         self.assertIsNone(resolve_exploration_command("dance"))

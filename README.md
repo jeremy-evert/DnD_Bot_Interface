@@ -1,8 +1,8 @@
 # DnD_Bot_Interface
 
-## Play D&D 0.5: The Mossy Delve
+## Play D&D 0.6: The Mossy Delve
 
-D&D 0.5 keeps the deterministic Python game engine in charge of rules, dice,
+D&D 0.6 keeps the deterministic Python game engine in charge of rules, dice,
 HP, inventory, movement, loot, victory, death, and persistent room objects. An
 optional local LLM can narrate high-value events and, once per room's first
 entry, suggest mundane scenery as structured JSON. Python validates every
@@ -29,6 +29,7 @@ Enable it with:
 ```sh
 export DND_NARRATOR=local
 export DND_LLM_MODEL="mlx-community/Qwen3.5-9B-MLX-4bit"
+export DND_LLM_TIMEOUT=24
 python3 -m dnd_combat
 ```
 
@@ -40,6 +41,12 @@ export DND_LLM_ENDPOINT="http://localhost:8080/v1/chat/completions"
 
 Qwen thinking is disabled for narration requests so the small token budget is
 spent on the visible DM response rather than hidden reasoning.
+The default request timeout is 24 seconds; set `DND_LLM_TIMEOUT` to another
+positive number of seconds when using a different model or server. Steve's
+Qwen3.5-9B benchmark measured 10.736 generated tokens/second (about 5.776 GB
+peak memory); the largest current prompt budgets are 160 and 180 output tokens,
+so 24 seconds leaves headroom beyond the roughly 17 seconds needed for 180
+generated tokens. The session report records per-request latency and fallback.
 
 If the local model server is unavailable, times out, returns malformed JSON, or
 returns empty text, the game automatically falls back to deterministic narration
@@ -54,11 +61,52 @@ engine has already resolved. The exact deterministic event remains visible, and
 Qwen adds a separate `DM:` line beneath it. Routine attack rolls stay factual
 and do not cause LLM calls; narration is reserved for room entry and outcomes.
 
-Outside combat, use `move`, `look`, and `status` (or their prompted initials).
-Directions accept `north`/`n`, `south`/`s`, `east`/`e`, and `west`/`w`. Use
-`take` with a blank target to list takeable objects; `ring` is an alias for the
-goblin's brass ring. Use `use` to drink a healing potion. In combat,
-choose `attack`, `use potion`, or `status`.
+Outside combat, use `move`, `look`, `status`, `take`, `use`, or `talk` (or the
+prompted initials). Directions accept `north`/`n`, `south`/`s`, `east`/`e`, and
+`west`/`w`. Carry the goblin's brass ring to Mira in the gallery and talk to
+her to open a hidden route to the vault. Use `take` with a blank target to list
+takeable objects. In combat, choose `attack`, `use potion`, or `status`.
+
+### Playtest sessions
+
+Each run appends a local JSONL play record under
+`~/.local/state/dnd-bot-interface/sessions/`. To inspect the latest session:
+
+```sh
+python3 -m dnd_combat report
+```
+
+Pass a JSONL path to report a particular session. Override the local directory
+with `DND_SESSION_LOG_DIR` if desired. Runtime records contain gameplay only
+and are not stored in the repository.
+
+### Steve's MLX lab
+
+The narrator endpoint is optional. If `mlx_lm.server` is installed in the
+active Python environment, start it in a separate Terminal window. The current
+Steve service is already running at `http://127.0.0.1:8080/v1`; select the
+advertised OptiQ model in the game client without restarting that service:
+
+```sh
+export DND_NARRATOR=local
+export DND_LLM_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
+export DND_LLM_MODEL="mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit-REAP-19B"
+export DND_LLM_TIMEOUT=24
+python3 -m dnd_combat
+```
+
+If starting a server is ever needed, the minimal compatible command is:
+
+```sh
+mlx_lm.server --model mlx-community/Qwen3.5-9B-MLX-4bit --port 8080
+```
+
+The server may download its selected model on first launch. If its command is
+unavailable, activate the environment where `mlx-lm` is installed first.
+Deterministic play does not require MLX; narrations fall back to Python text
+when the endpoint cannot respond. Do not expose this local development server
+to the public internet. See `docs/DND_0_6_STEVE_PLAYTEST.md` for measured
+smoke-test latency and fallback results.
 
 Run the full deterministic test suite with:
 
@@ -70,7 +118,7 @@ No third-party Python packages are required for the game or narrator client.
 
 ### 0.5 architecture checkpoint
 
-The three-room map and game rules are unchanged. The code now separates
+The 0.5 refactor separates
 persistent world state (`world.py`), deterministic rules (`adventure.py`),
 player command matching (`matching.py` and `commands.py`), terminal rendering
 (`terminal.py`), and local LLM transport/JSON extraction (`llm_adapter.py`).
@@ -84,8 +132,10 @@ identify their respective unique objects, while ambiguous phrases fail safely.
 
 ## Project status
 
-Current milestone: D&D 0.5, a terminal adventure with persistent room objects
-and an optional local Qwen-compatible narrator. The engine remains deterministic and authoritative.
+Current milestone: D&D 0.6, a 10-room terminal adventure with branching and
+looping routes, a ring-reactive NPC shortcut, persistent room objects, and an
+optional local Qwen-compatible narrator. The engine remains deterministic and
+authoritative.
 There is still no GUI, agent framework, database, or voice layer.
 
 ---

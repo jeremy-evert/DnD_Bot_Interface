@@ -34,6 +34,7 @@ class Adventure:
     current_room_id: str = "entry"
     state: str = "playing"  # playing, won, dead
     combat_turn: str | None = None  # hero or enemy
+    vault_opened: bool = False
 
     @property
     def room(self) -> Room:
@@ -73,6 +74,20 @@ class Adventure:
         self.current_room_id = destination
         self.combat_turn = None
         return True, f"You enter {self.room.name}."
+
+    def talk(self, target: str = "") -> tuple[bool, str]:
+        """Resolve the fixed, deterministic dialogue opportunity with Mira."""
+        if self.room.npc is None:
+            return False, "There is no one here to talk to."
+        if target and target.lower() not in {"mira", "archivist", "her"}:
+            return False, f"There is no one called {target} here."
+        if "goblin's brass ring" in self.hero.inventory:
+            if not self.vault_opened:
+                self.vault_opened = True
+                self.room.exits["west"] = "sanctum"
+                return True, "Mira recognizes the brass ring. She opens a hidden door west to the vault."
+            return True, "Mira nods at the ring; the hidden door west remains open."
+        return True, "Mira studies your empty hands. 'The old keeper wore a brass ring; bring it here, and I can open a way west.'"
 
     def take_item(self, item: str = "") -> tuple[bool, str]:
         """Take a deterministic, takeable room object by name or alias."""

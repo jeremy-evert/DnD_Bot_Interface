@@ -139,12 +139,24 @@ class NarratorTests(unittest.TestCase):
             clear=True,
         ):
             narrator = make_narrator()
-            self.assertIsInstance(narrator, LocalLLMNarrator)
-            self.assertEqual(narrator.model, "custom-qwen")
-            self.assertEqual(
-                narrator.endpoint,
-                "http://localhost:9999/v1/chat/completions",
-            )
+        self.assertIsInstance(narrator, LocalLLMNarrator)
+        self.assertEqual(narrator.model, "custom-qwen")
+        self.assertEqual(
+            narrator.endpoint,
+            "http://localhost:9999/v1/chat/completions",
+        )
+
+    def test_local_narrator_timeout_is_environment_configurable(self):
+        with patch.dict(os.environ, {"DND_LLM_TIMEOUT": "21.5"}):
+            narrator = LocalLLMNarrator(urlopen_fn=lambda *args, **kwargs: None)
+
+        self.assertEqual(narrator.timeout, 21.5)
+
+    def test_local_narrator_uses_twenty_four_second_default_timeout(self):
+        with patch.dict(os.environ, {}, clear=True):
+            narrator = LocalLLMNarrator(urlopen_fn=lambda *args, **kwargs: None)
+
+        self.assertEqual(narrator.timeout, 24.0)
 
 
 if __name__ == "__main__":

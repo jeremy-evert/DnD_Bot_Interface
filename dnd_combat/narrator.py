@@ -13,6 +13,7 @@ from .llm_adapter import LocalLLMAdapter
 
 DEFAULT_ENDPOINT = "http://localhost:8080/v1/chat/completions"
 DEFAULT_MODEL = "mlx-community/Qwen3.5-9B-MLX-4bit"
+DEFAULT_TIMEOUT = 24.0
 
 SYSTEM_PROMPT = """You are the narrator for a tiny fantasy dungeon adventure.
 
@@ -61,15 +62,19 @@ class LocalLLMNarrator(Narrator):
         *,
         endpoint: str | None = None,
         model: str | None = None,
-        timeout: float = 4.0,
+        timeout: float | None = None,
         fallback: Narrator | None = None,
         urlopen_fn=None,
     ) -> None:
         self.endpoint = endpoint or os.getenv("DND_LLM_ENDPOINT", DEFAULT_ENDPOINT)
         self.model = model or os.getenv("DND_LLM_MODEL", DEFAULT_MODEL)
-        self.timeout = timeout
+        self.timeout = float(os.getenv("DND_LLM_TIMEOUT", DEFAULT_TIMEOUT)) if timeout is None else float(timeout)
+        if self.timeout <= 0:
+            raise ValueError("DND_LLM_TIMEOUT must be greater than zero seconds.")
         self.fallback = fallback or PlainNarrator()
         self.adapter = LocalLLMAdapter(self.endpoint, timeout, urlopen_fn)
+        self.last_narration_fallback = False
+        self.last_suggestion_fallback = False
 
     def narrate(self, event: str, facts: dict, plain_text: str) -> str:
         payload = {
@@ -97,6 +102,7 @@ class LocalLLMNarrator(Narrator):
         }
 
         content = self.adapter.request_content(payload, context="narrator")
+        self.last_narration_fallback = not bool(content)
         if content:
             return f"{plain_text}\nDM: {content}"
         return self.fallback.narrate(event, facts, plain_text)
@@ -116,7 +122,10 @@ class LocalLLMNarrator(Narrator):
             "max_tokens": 180,
             "stream": False,
         }
-        data = self.adapter.request_json(payload, context="room-object", fallback={})
+        data = self.adapter.request_json(payload, context="room-object", fallback=None)
+        self.last_suggestion_fallback = (
+            not isinstance(data, dict) or not isinstance(data.get("objects"), list)
+        )
         objects = data.get("objects") if isinstance(data, dict) else None
         return objects if isinstance(objects, list) else []
 

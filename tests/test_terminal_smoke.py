@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from dnd_combat.__main__ import main
-from dnd_combat.narrator import Narrator, PlainNarrator
+from dnd_combat.narrator import LocalLLMNarrator, Narrator, PlainNarrator
 from dnd_combat.session_log import RecordingNarrator as SessionNarrator, SessionRecorder
 
 
@@ -40,6 +40,94 @@ class SuggestingNarrator(RecordingNarrator):
 
 
 class TerminalSmokeTests(unittest.TestCase):
+    @staticmethod
+    def mira_route_commands():
+        return [
+            "Arin", "fighter", "attack",
+            "move", "east", "move", "east", "move", "north",
+            "talk", "Mira", "move", "south", "move", "west", "move", "west",
+            "take", "goblin's brass ring", "move", "east", "move", "east",
+            "move", "north", "talk", "Mira", "move", "west", "attack",
+        ]
+
+    def run_mira_route(self, narrator, recorder, output):
+        from dnd_combat.adventure import Adventure as RealAdventure
+
+        games = []
+
+        def make_game(hero):
+            game = RealAdventure(hero)
+            game.rooms["entry"].enemy.hp = 1
+            game.rooms["sanctum"].enemy.hp = 1
+            games.append(game)
+            return game
+
+        roller = lambda sides: 20
+        with patch("dnd_combat.__main__.Adventure", side_effect=make_game), \
+             patch("builtins.input", side_effect=self.mira_route_commands()), \
+             patch("sys.stdout", output):
+            main(roller, narrator, recorder)
+        return games[0]
+
+    def test_mira_memory_is_in_narration_packet_and_talk_record(self):
+        class CapturingNarrator(PlainNarrator):
+            def __init__(self):
+                self.packets = []
+
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    self.packets.append((dict(facts), plain_text))
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "mira.jsonl")
+            narrator = CapturingNarrator()
+            output = io.StringIO()
+            game = self.run_mira_route(narrator, recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([facts["mira_remembered_prior_ask"] for facts, _ in narrator.packets], [False, True])
+        for facts, _ in narrator.packets:
+            self.assertTrue(all(
+                isinstance(value, (str, bool)) or
+                (isinstance(value, list) and all(isinstance(item, str) for item in value))
+                for value in facts.values()
+            ))
+        talks = [event for event in events if event["event"] == "player_input" and event["action"] == "talk"]
+        self.assertEqual([event["details"]["mira_remembered_prior_ask"] for event in talks], [False, True])
+        self.assertTrue(game.vault_opened)
+
+    def test_hostile_narrator_cannot_change_mira_route(self):
+        class HostileNarrator(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    facts["inventory"].clear()
+                    facts["mira_remembered_prior_ask"] = False
+                    return "Mira refuses and the door stays sealed"
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "hostile.jsonl")
+            game = self.run_mira_route(HostileNarrator(), recorder, io.StringIO())
+
+        self.assertTrue(game.vault_opened)
+        self.assertEqual(game.rooms["gallery"].exits["west"], "sanctum")
+        self.assertIn("goblin's brass ring", game.hero.inventory)
+        self.assertTrue(game.mira_memory.asked_about_ring)
+
+    def test_failed_narrator_transport_falls_back_and_route_completes(self):
+        def fail_request(*args, **kwargs):
+            raise OSError("offline")
+
+        narrator = LocalLLMNarrator(urlopen_fn=fail_request)
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "failed.jsonl")
+            output = io.StringIO()
+            game = self.run_mira_route(narrator, recorder, output)
+
+        self.assertTrue(game.vault_opened)
+        self.assertIn("You remembered what I asked", output.getvalue())
+
     def test_full_adventure_reaches_victory_and_emits_narration_events(self):
         roller = FixedRoller(20, 1, 20, 10, 20, 1, 20, 10, 1, 20, 10)
         commands = [

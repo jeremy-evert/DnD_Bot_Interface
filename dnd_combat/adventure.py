@@ -26,6 +26,11 @@ _DIRECTION_MATCHER = DeterministicMatcher(
 
 
 @dataclass
+class MiraMemory:
+    asked_about_ring: bool = False
+
+
+@dataclass
 class Adventure:
     """Mutable game state and rules for the 0.2 adventure."""
 
@@ -35,6 +40,7 @@ class Adventure:
     state: str = "playing"  # playing, won, dead
     combat_turn: str | None = None  # hero or enemy
     vault_opened: bool = False
+    mira_memory: MiraMemory = field(default_factory=MiraMemory)
 
     @property
     def room(self) -> Room:
@@ -85,8 +91,11 @@ class Adventure:
             if not self.vault_opened:
                 self.vault_opened = True
                 self.room.exits["west"] = "sanctum"
+                if self.mira_memory.asked_about_ring:
+                    return True, "You remembered what I asked. Mira opens the hidden door west to the vault."
                 return True, "Mira recognizes the brass ring. She opens a hidden door west to the vault."
             return True, "Mira nods at the ring; the hidden door west remains open."
+        self.mira_memory.asked_about_ring = True
         return True, "Mira studies your empty hands. 'The old keeper wore a brass ring; bring it here, and I can open a way west.'"
 
     def take_item(self, item: str = "") -> tuple[bool, str]:

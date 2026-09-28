@@ -55,6 +55,87 @@ class AdventureTests(unittest.TestCase):
         game.move("west")
         self.assertEqual(game.current_room_id, "sanctum")
 
+    def test_mira_remembers_ring_question_after_player_leaves_gallery(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.move("east")
+        game.move("east")
+        game.move("north")
+
+        self.assertTrue(game.talk()[0])
+        self.assertTrue(game.mira_memory.asked_about_ring)
+        self.assertTrue(game.move("south")[0])
+        game.hero.inventory.append("goblin's brass ring")
+        self.assertTrue(game.move("north")[0])
+
+        interacted, response = game.talk("Mira")
+
+        self.assertTrue(interacted)
+        self.assertIn("You remembered what I asked", response)
+        self.assertIn("opens the hidden door west to the vault", response)
+        self.assertEqual(game.room.exits["west"], "sanctum")
+        self.assertTrue(game.vault_opened)
+
+    def test_mira_opens_shortcut_for_ring_without_claiming_prior_conversation(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.hero.inventory.append("goblin's brass ring")
+        game.move("east")
+        game.move("east")
+        game.move("north")
+
+        interacted, response = game.talk("Mira")
+
+        self.assertTrue(interacted)
+        self.assertNotIn("You remembered what I asked", response)
+        self.assertEqual(game.room.exits["west"], "sanctum")
+        self.assertTrue(game.vault_opened)
+
+    def test_mira_memory_is_fresh_per_adventure_and_not_inferred(self):
+        first = Adventure(make_character("fighter", "Arin"))
+        second = Adventure(make_character("fighter", "Bea"))
+        first.hero.inventory.append("goblin's brass ring")
+
+        self.assertFalse(first.mira_memory.asked_about_ring)
+        self.assertFalse(second.mira_memory.asked_about_ring)
+        self.assertIsNot(first.mira_memory, second.mira_memory)
+        first.rooms["entry"].enemy.hp = 0
+        first.move("east")
+        first.move("east")
+        first.move("north")
+        self.assertFalse(first.mira_memory.asked_about_ring)
+        first.talk("Mira")
+        self.assertFalse(second.mira_memory.asked_about_ring)
+
+    def test_repeat_talk_after_mira_opens_shortcut_changes_nothing(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.hero.inventory.append("goblin's brass ring")
+        game.move("east")
+        game.move("east")
+        game.move("north")
+        game.talk("Mira")
+        exits = dict(game.room.exits)
+        memory = game.mira_memory.asked_about_ring
+
+        interacted, response = game.talk("Mira")
+
+        self.assertTrue(interacted)
+        self.assertEqual(response, "Mira nods at the ring; the hidden door west remains open.")
+        self.assertEqual(game.room.exits, exits)
+        self.assertTrue(game.vault_opened)
+        self.assertEqual(game.mira_memory.asked_about_ring, memory)
+
+    def test_holding_ring_and_being_in_gallery_do_not_set_mira_memory(self):
+        game = Adventure(make_character("fighter", "Arin"))
+        game.rooms["entry"].enemy.hp = 0
+        game.hero.inventory.append("goblin's brass ring")
+        game.move("east")
+        game.move("east")
+        game.move("north")
+
+        self.assertFalse(game.mira_memory.asked_about_ring)
+
     def test_gallery_npc_hints_at_ring_when_player_has_not_found_it(self):
         game = Adventure(make_character("fighter", "Arin"))
         game.rooms["entry"].enemy.hp = 0

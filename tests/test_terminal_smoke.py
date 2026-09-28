@@ -154,6 +154,105 @@ class TerminalSmokeTests(unittest.TestCase):
                 self.assertEqual(game.current_room_id, "sanctum")
                 self.assertEqual(game.room.name, "Hollow Vault")
 
+    def test_string_subclass_cannot_hide_earned_dialogue(self):
+        class DeceptiveString(str):
+            def startswith(self, *args, **kwargs):
+                return True
+
+            def partition(self, *args, **kwargs):
+                return ("", "", "")
+
+            def __contains__(self, item):
+                return True
+
+        class DeceptiveNarrator(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    return DeceptiveString("Mira refuses")
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "deceptive.jsonl")
+            output = io.StringIO()
+            game = self.run_mira_route(DeceptiveNarrator(), recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(game.vault_opened)
+        self.assertIn("You remembered what I asked", output.getvalue())
+        narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+        self.assertEqual(len(narrations), 2)
+        self.assertTrue(all(event["fallback"] is False for event in narrations))
+
+    def test_string_subclass_parse_methods_cannot_abort_route_or_record(self):
+        class ExplodingString(str):
+            def partition(self, *args, **kwargs):
+                raise AssertionError("subclass partition must not be called")
+
+            def __contains__(self, item):
+                raise AssertionError("subclass __contains__ must not be called")
+
+        class ExplodingNarrator(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    return ExplodingString("Mira's answer")
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "exploding.jsonl")
+            output = io.StringIO()
+            game = self.run_mira_route(ExplodingNarrator(), recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(game.vault_opened)
+        self.assertIn("You remembered what I asked", output.getvalue())
+        talks = [event for event in events if event["event"] == "player_input" and event["action"] == "talk"]
+        narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+        self.assertEqual(len(talks), 2)
+        self.assertEqual(len(narrations), 2)
+
+    def test_baseexception_from_narrator_propagates(self):
+        class Stop(BaseException):
+            pass
+
+        class StoppingNarrator(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    raise Stop("stop requested")
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "stop.jsonl")
+            with self.assertRaisesRegex(Stop, "stop requested"):
+                self.run_mira_route(StoppingNarrator(), recorder, io.StringIO())
+
+    def test_llm_style_fallback_still_records_request_facts(self):
+        cases = (
+            ("none", lambda event, facts, plain: None),
+            ("exception", lambda event, facts, plain: (_ for _ in ()).throw(RuntimeError("offline"))),
+        )
+        for label, behavior in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                class BrokenLLMNarrator(PlainNarrator):
+                    adapter = object()
+
+                    def narrate(self, event, facts, plain_text):
+                        if event == "npc_dialogue":
+                            return behavior(event, facts, plain_text)
+                        return plain_text
+
+                recorder = SessionRecorder(Path(directory) / f"{label}.jsonl")
+                output = io.StringIO()
+                game = self.run_mira_route(BrokenLLMNarrator(), recorder, output)
+                events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+
+            self.assertTrue(game.vault_opened)
+            self.assertIn("You remembered what I asked", output.getvalue())
+            narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+            self.assertEqual(len(narrations), 2)
+            self.assertTrue(all(event["llm"] for event in narrations))
+            self.assertTrue(all(event["fallback"] for event in narrations))
+            self.assertEqual([event["request_facts"]["mira_remembered_prior_ask"] for event in narrations], [False, True])
+
     def test_mutate_then_raise_preserves_original_narration_facts(self):
         class MutateThenRaise(PlainNarrator):
             def narrate(self, event, facts, plain_text):

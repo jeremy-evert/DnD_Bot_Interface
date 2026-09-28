@@ -156,7 +156,7 @@ class RecordingNarrator(Narrator):
         started = time.perf_counter()
         try:
             rendered = self.narrator.narrate(event, deepcopy(request_facts), plain_text)
-            narrator_failed = not isinstance(rendered, str)
+            narrator_failed = type(rendered) is not str
         except Exception:
             narrator_failed = True
         if narrator_failed:

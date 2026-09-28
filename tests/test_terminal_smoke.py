@@ -108,12 +108,47 @@ class TerminalSmokeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             recorder = SessionRecorder(Path(directory) / "hostile.jsonl")
-            game = self.run_mira_route(HostileNarrator(), recorder, io.StringIO())
+            output = io.StringIO()
+            game = self.run_mira_route(HostileNarrator(), recorder, output)
 
         self.assertTrue(game.vault_opened)
         self.assertEqual(game.rooms["gallery"].exits["west"], "sanctum")
         self.assertIn("goblin's brass ring", game.hero.inventory)
         self.assertTrue(game.mira_memory.asked_about_ring)
+        visible = output.getvalue()
+        earned_line = "You remembered what I asked"
+        hostile_line = "Mira refuses and the door stays sealed"
+        self.assertIn(earned_line, visible)
+        self.assertLess(visible.index(earned_line), visible.rindex(hostile_line))
+
+    def test_narrator_prefix_is_printed_without_duplicate_deterministic_response(self):
+        class PrefixNarrator(PlainNarrator):
+            def __init__(self):
+                self.dialogue = []
+
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    self.dialogue.append(plain_text)
+                    return f"{plain_text}\nDM: extra"
+                return plain_text
+
+        narrator = PrefixNarrator()
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "prefix.jsonl")
+            output = io.StringIO()
+            self.run_mira_route(narrator, recorder, output)
+
+        expected = "\n".join(
+            part for message in narrator.dialogue for part in (message, "DM: extra")
+        )
+        printed_lines = output.getvalue().splitlines()
+        dialogue_lines = [
+            line for line in printed_lines
+            if line in narrator.dialogue or line == "DM: extra"
+        ]
+        self.assertEqual(dialogue_lines, expected.splitlines())
+        for message in narrator.dialogue:
+            self.assertEqual(dialogue_lines.count(message), 1)
 
     def test_failed_narrator_transport_falls_back_and_route_completes(self):
         def fail_request(*args, **kwargs):

@@ -281,6 +281,8 @@ def main(
                     },
                     message,
                 )
+                if not narrated.startswith(message):
+                    narrated = f"{message}\n{narrated}"
             recorder.input(
                 f"{raw_choice} {target}".strip(), game, action="talk",
                 outcome=message,

@@ -47,7 +47,7 @@ class TerminalSmokeTests(unittest.TestCase):
             "move", "east", "move", "east", "move", "north",
             "talk", "Mira", "move", "south", "move", "west", "move", "west",
             "take", "goblin's brass ring", "move", "east", "move", "east",
-            "move", "north", "talk", "Mira", "move", "west", "attack",
+            "move", "north", "talk", "Mira", "move", "west", "attack", "move", "west",
         ]
 
     def run_mira_route(self, narrator, recorder, output):
@@ -110,16 +110,83 @@ class TerminalSmokeTests(unittest.TestCase):
             recorder = SessionRecorder(Path(directory) / "hostile.jsonl")
             output = io.StringIO()
             game = self.run_mira_route(HostileNarrator(), recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
 
         self.assertTrue(game.vault_opened)
         self.assertEqual(game.rooms["gallery"].exits["west"], "sanctum")
         self.assertIn("goblin's brass ring", game.hero.inventory)
         self.assertTrue(game.mira_memory.asked_about_ring)
+        talks = [event for event in events if event["event"] == "player_input" and event["action"] == "talk"]
+        narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+        self.assertEqual([event["details"]["mira_remembered_prior_ask"] for event in talks], [False, True])
+        self.assertTrue(talks[1]["details"]["mira_remembered_prior_ask"])
+        self.assertIn("goblin's brass ring", talks[1]["state"]["inventory"])
+        self.assertEqual([event["request_facts"]["mira_remembered_prior_ask"] for event in narrations], [False, True])
+        self.assertIn("goblin's brass ring", narrations[1]["request_facts"]["inventory"])
         visible = output.getvalue()
         earned_line = "You remembered what I asked"
         hostile_line = "Mira refuses and the door stays sealed"
         self.assertIn(earned_line, visible)
         self.assertLess(visible.index(earned_line), visible.rindex(hostile_line))
+
+    def test_narrator_invalid_returns_and_exceptions_fall_back(self):
+        cases = (
+            ("none", lambda event, facts, plain: None),
+            ("integer", lambda event, facts, plain: 42),
+            ("exception", lambda event, facts, plain: (_ for _ in ()).throw(RuntimeError("boom"))),
+        )
+        for label, behavior in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                class BrokenNarrator(PlainNarrator):
+                    def narrate(self, event, facts, plain_text):
+                        if event == "npc_dialogue":
+                            return behavior(event, facts, plain_text)
+                        return plain_text
+
+                recorder = SessionRecorder(Path(directory) / f"{label}.jsonl")
+                output = io.StringIO()
+                game = self.run_mira_route(BrokenNarrator(), recorder, output)
+                events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+                talks = [event for event in events if event["event"] == "player_input" and event["action"] == "talk"]
+                self.assertEqual(len(talks), 2)
+                self.assertIn("You remembered what I asked", output.getvalue())
+                self.assertTrue(game.vault_opened)
+                self.assertEqual(game.current_room_id, "sanctum")
+                self.assertEqual(game.room.name, "Hollow Vault")
+
+    def test_mutate_then_raise_preserves_original_narration_facts(self):
+        class MutateThenRaise(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    facts["mira_remembered_prior_ask"] = not facts["mira_remembered_prior_ask"]
+                    facts["inventory"].clear()
+                    raise RuntimeError("after mutation")
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "mutate-raise.jsonl")
+            output = io.StringIO()
+            self.run_mira_route(MutateThenRaise(), recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+        narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+        self.assertEqual([event["request_facts"]["mira_remembered_prior_ask"] for event in narrations], [False, True])
+        self.assertIn("goblin's brass ring", narrations[1]["request_facts"]["inventory"])
+
+    def test_valid_prefixed_narration_records_response_without_duplication(self):
+        class PrefixNarrator(PlainNarrator):
+            def narrate(self, event, facts, plain_text):
+                if event == "npc_dialogue":
+                    return f"{plain_text}\nDM: extra"
+                return plain_text
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "prefixed-record.jsonl")
+            output = io.StringIO()
+            self.run_mira_route(PrefixNarrator(), recorder, output)
+            events = [json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()]
+        narrations = [event for event in events if event["event"] == "narration" and event["category"] == "npc_dialogue"]
+        self.assertEqual([event["response"] for event in narrations], ["extra", "extra"])
+        self.assertEqual(output.getvalue().count("DM: extra"), 2)
 
     def test_narrator_prefix_is_printed_without_duplicate_deterministic_response(self):
         class PrefixNarrator(PlainNarrator):

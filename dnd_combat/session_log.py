@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 import json
 import os
@@ -151,8 +152,15 @@ class RecordingNarrator(Narrator):
 
     def narrate(self, event: str, facts: dict, plain_text: str) -> str:
         is_llm = hasattr(self.narrator, "adapter")
+        request_facts = deepcopy(facts)
         started = time.perf_counter()
-        rendered = self.narrator.narrate(event, facts, plain_text)
+        try:
+            rendered = self.narrator.narrate(event, deepcopy(request_facts), plain_text)
+            narrator_failed = not isinstance(rendered, str)
+        except Exception:
+            narrator_failed = True
+        if narrator_failed:
+            rendered = plain_text
         latency_ms = (time.perf_counter() - started) * 1000
         response = rendered.partition("\nDM: ")[2] if "\nDM: " in rendered else ""
         fallback = getattr(self.narrator, "last_narration_fallback", is_llm and not response)
@@ -161,9 +169,9 @@ class RecordingNarrator(Narrator):
             category=event,
             llm=is_llm,
             model=getattr(self.narrator, "model", None) if is_llm else None,
-            request_facts=facts,
+            request_facts=request_facts,
             response=response or None,
-            fallback=is_llm and fallback,
+            fallback=is_llm and (narrator_failed or fallback),
             latency_ms=round(latency_ms, 1) if is_llm else None,
         )
         return rendered

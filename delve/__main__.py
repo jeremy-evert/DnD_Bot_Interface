@@ -3,10 +3,10 @@ import argparse
 from pathlib import Path
 import time
 
-from .commands import ParseProblem, parse_command
+from .commands import HELP_FORMS, ParseProblem, parse_command
 from .engine import Engine
 from .pack import load_engine_ready_pack
-from .render import RenderMemory, render_death, render_event, render_status, render_victory
+from .render import RenderMemory, render_death, render_event, render_help, render_status, render_victory
 from .state import DelveState
 
 
@@ -52,7 +52,7 @@ def main(argv=None):
                 return 0
             parsed = parse_command(line, state, pack)
             if isinstance(parsed, ParseProblem):
-                if parsed.message_key == "command.empty":
+                if parsed.text:
                     print(parsed.text)
                 else:
                     print(render_event({"key": parsed.message_key, "fact_slots": parsed.fact_slots}, pack, seed, memory))
@@ -61,6 +61,10 @@ def main(argv=None):
                 events = engine.apply(parsed)
                 for event in events:
                     if event.key in ("terminal.death", "terminal.victory") or event.type == "enemy_intent":
+                        continue
+                    if event.key == "help":
+                        tip = render_event(event, pack, seed, memory)
+                        print(render_help(HELP_FORMS, tip))
                         continue
                     print(render_event(event, pack, seed, memory))
                 if state.terminal == "dead":

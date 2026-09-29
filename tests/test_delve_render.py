@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from delve import __main__ as terminal
 from delve.pack import load_pack
+from delve.commands import HELP_FORMS
 from delve.render import (RenderMemory, render_death, render_event, render_help,
                           render_status, render_victory, select_variant)
 from delve.state import DelveState
@@ -151,9 +152,11 @@ class DelveRenderTests(unittest.TestCase):
             "Hazard: COLLAPSE [hazard].\nObjects: brass ring [near].")
 
     def test_help_death_victory_and_clock_bars(self):
-        self.assertEqual(render_help(), "HELP — n/s/e/w move; x <thing> read; i inventory; a attack; sh <enemy> shove;\n"
-            "b brace; t <item> throw; u <item> use; g <item> get; q quit.\n"
-            "Enemy intent is shown before it resolves. Use zones, hazards, and exits.")
+        help_text = render_help(HELP_FORMS, "Brace heavy blows, shove swings and grabs, throw silver at a closed guard.")
+        self.assertIn("HELP — n / north", help_text)
+        self.assertIn("x/look", help_text)
+        self.assertIn("b/brace", help_text)
+        self.assertTrue(help_text.endswith("Brace heavy blows, shove swings and grabs, throw silver at a closed guard."))
         event={"key":"terminal.death","fact_slots":{"cause":"the Captain's SMASH"}}
         death=render_death(event,self.pack)
         self.assertIn("YOU DIED — The Captain's SMASH broke through because of the Captain's SMASH.",death)

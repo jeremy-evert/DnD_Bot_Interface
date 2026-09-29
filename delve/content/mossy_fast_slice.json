@@ -631,9 +631,9 @@
           "room_name"
         ],
         "variants": [
-          "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. She knows the vault."
+          "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. Give her the brass ring to hear what she knows about the vault."
         ],
-        "fallback": "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. She knows the vault."
+        "fallback": "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. Give her the brass ring to hear what she knows about the vault."
       },
       {
         "key": "room.vault",
@@ -1112,14 +1112,14 @@
           "object_name"
         ],
         "variants": [
-          "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring.",
-          "The {{object_name}} is spotless except for one empty ring groove, worn shiny by a checking thumb.",
-          "Mira, says the {{object_name}}. The empty groove beneath says what she is missing: a brass ring.",
+          "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring. Give her the ring.",
+          "The {{object_name}} is spotless except for one empty ring groove, worn shiny by a checking thumb. Give Mira the ring.",
+          "Mira, says the {{object_name}}. The empty groove beneath says what she is missing: a brass ring. Give her the ring.",
           "The {{object_name}}: one name, one empty groove. Someone took her ring. Someone could bring it back.",
           "The {{object_name}} names Mira. Its empty groove would fit the brass ring back in the entry.",
           "Polished brass, one name, one hole in the story: the {{object_name}}."
         ],
-        "fallback": "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring."
+        "fallback": "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring. Give her the ring."
       },
       {
         "key": "move.blocked",
@@ -1345,11 +1345,11 @@
         ],
         "variants": [
           "“{{verb}}” isn’t something you can do here. Type ? for the list.",
-          "No move called “{{verb}}”. Try ? for help.",
-          "The delve doesn’t know “{{verb}}”. Type ? to see what works.",
-          "Unclear: “{{verb}}”. Type ? for commands.",
-          "“{{verb}}”? Try look, get, use, throw, or a direction.",
-          "That won’t parse: “{{verb}}”. The ? key lists what will."
+          "No move called “{{verb}}”. Type ? for the list.",
+          "The delve doesn’t know “{{verb}}”. Type ? for the list.",
+          "Unclear: “{{verb}}”. Type ? for the list.",
+          "“{{verb}}”? Type ? for the list.",
+          "That won’t parse: “{{verb}}”. Type ? for the list."
         ],
         "fallback": "“{{verb}}” isn’t something you can do here. Type ? for the list."
       },

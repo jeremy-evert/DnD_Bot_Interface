@@ -188,10 +188,22 @@ def render_status(state, pack, memory=None):
     return "\n".join(lines)
 
 
-def render_help():
-    return ("HELP — n/s/e/w move; x <thing> read; i inventory; a attack; sh <enemy> shove;\n"
-            "b brace; t <item> throw; u <item> use; g <item> get; q quit.\n"
-            "Enemy intent is shown before it resolves. Use zones, hazards, and exits.")
+def render_help(command_forms=(), contextual_tip=""):
+    """Render parser-supplied forms, followed by the current bank help line."""
+    lines = []
+    current = "HELP — "
+    for form in command_forms:
+        segment = ("" if current.endswith(" — ") else "; ") + form
+        if len(current) + len(segment) > 92 and not current.endswith(" — "):
+            lines.append(current)
+            current = "       " + form
+        else:
+            current += segment
+    if current.strip():
+        lines.append(current)
+    if contextual_tip:
+        lines.append(contextual_tip)
+    return "\n".join(lines)
 
 
 def render_death(event, pack=None, seed=0, memory=None):

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from delve import __main__ as terminal
-from delve.commands import ParseProblem, parse_command
+from delve.commands import COMMANDS, HELP_FORMS, ParseProblem, parse_command
 from delve.engine import Action, Engine
 from delve.pack import load_engine_ready_pack
 from delve.render import RenderMemory, render_event, render_status
@@ -108,6 +108,138 @@ class DelveTerminalTests(unittest.TestCase):
         self.assertIsInstance(unknown, ParseProblem)
         self.assertEqual((unknown.message_key, unknown.fact_slots), ("target.unknown", {"target": "moon rock"}))
         self.assertEqual(before, state.snapshot())
+
+    def test_all_parser_aliases_are_listed_and_resolve_to_the_table_action(self):
+        state = DelveState.new(self.pack, 1, "fighter")
+        state.inventory.append("brass_ring")
+        cases = {
+            "n": ("n", "move"), "north": ("north", "move"),
+            "s": ("s", "move"), "south": ("south", "move"),
+            "e": ("e", "move"), "east": ("east", "move"),
+            "w": ("w", "move"), "west": ("west", "move"),
+            "go": ("go north", "move"),
+            "x": ("x ring", "look"), "look": ("look ring", "look"),
+            "examine": ("examine ring", "look"), "inspect": ("inspect ring", "look"),
+            "read": ("read ring", "look"), "check": ("check ring", "look"),
+            "study": ("study ring", "look"), "talk": ("talk ring", "look"),
+            "speak": ("speak to ring", "look"), "ask": ("ask with ring", "look"),
+            "greet": ("greet ring", "look"),
+            "i": ("i", "inventory"), "inventory": ("inventory", "inventory"),
+            "a": ("a goblin", "attack"), "attack": ("attack goblin", "attack"),
+            "hit": ("hit goblin", "attack"), "strike": ("strike goblin", "attack"),
+            "fight": ("fight goblin", "attack"), "swing": ("swing goblin", "attack"),
+            "slash": ("slash goblin", "attack"), "heavy": ("heavy goblin", "attack"),
+            "b": ("b", "brace"), "brace": ("brace", "brace"),
+            "defend": ("defend", "brace"), "guard": ("guard", "brace"),
+            "block": ("block", "brace"), "parry": ("parry", "brace"),
+            "sh": ("sh goblin", "shove"), "shove": ("shove goblin", "shove"),
+            "push": ("push goblin", "shove"), "shoulder": ("shoulder goblin", "shove"),
+            "shunt": ("shunt goblin", "shove"),
+            "t": ("t ring", "throw"), "throw": ("throw ring", "throw"),
+            "toss": ("toss ring", "throw"), "hurl": ("hurl ring", "throw"),
+            "fling": ("fling ring", "throw"),
+            "u": ("u ring", "use"), "use": ("use ring", "use"),
+            "give": ("give ring", "use"), "hand": ("hand ring", "use"),
+            "show": ("show ring", "use"), "offer": ("offer ring", "use"),
+            "present": ("present ring", "use"), "put": ("put ring", "use"),
+            "drink": ("drink ring", "use"),
+            "g": ("g ring", "get"), "get": ("get ring", "get"),
+            "take": ("take ring", "get"), "grab": ("grab ring", "get"),
+            "pick": ("pick ring", "get"), "pick up": ("pick up ring", "get"),
+            "ret": ("ret west", "retreat"), "retreat": ("retreat west", "retreat"),
+            "flee": ("flee west", "retreat"), "?": ("?", "help"),
+            "help": ("help", "help"), "q": ("q", "quit"), "quit": ("quit", "quit"),
+        }
+        aliases = {alias for _, group, _ in COMMANDS for alias in group}
+        self.assertEqual(aliases, set(cases))
+        rendered_help = " ".join(HELP_FORMS).casefold()
+        for alias, (line, expected_verb) in cases.items():
+            with self.subTest(alias=alias):
+                self.assertIn(alias, rendered_help)
+                parsed = parse_command(line, state, self.pack)
+                self.assertIsInstance(parsed, Action)
+                self.assertEqual(parsed.verb, expected_verb)
+        picked_up = parse_command("pick up ring", state, self.pack)
+        self.assertEqual((picked_up.verb, picked_up.target_id), ("get", "brass_ring_obj"))
+
+    def test_terminal_help_prints_every_parser_alias_then_a_bank_tip(self):
+        _, output = self.play(["", "?", "q"], seed=1)
+        help_output = output.split("HELP —", 1)[1]
+        aliases = {alias for _, group, _ in COMMANDS for alias in group}
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                self.assertIn(alias, help_output.casefold())
+        bank_help = next(entry for entry in self.pack.bank if entry.key == "help")
+        self.assertTrue(any(tip in output for tip in bank_help.variants))
+
+    def test_natural_handover_target_forms_and_hazard_look(self):
+        state = DelveState.new(self.pack, 1, "fighter")
+        state.room_id = "mira_gallery"
+        state.inventory.append("brass_ring")
+        for line in ("give ring to Mira", "give Mira brass ring", "use ring on nameplate",
+                     "put brass ring in nameplate", "show ring"):
+            with self.subTest(line=line):
+                parsed = parse_command(line, state, self.pack)
+                self.assertIsInstance(parsed, Action)
+                self.assertEqual((parsed.verb, parsed.target_id), ("use", "brass_ring"))
+        invalid_target = parse_command("give ring to moon", state, self.pack)
+        self.assertIsInstance(invalid_target, ParseProblem)
+        self.assertEqual(invalid_target.message_key, "target.unknown")
+
+        state.room_id = "hollow_vault"
+        before = copy.deepcopy(state.snapshot())
+        for target in ("collapse", "ceiling", "hazard", "arch"):
+            with self.subTest(hazard=target):
+                problem = parse_command(f"x {target}", state, self.pack)
+                self.assertIsInstance(problem, ParseProblem)
+                self.assertIn("shove an enemy", problem.text)
+                self.assertEqual(before, state.snapshot())
+
+    def test_unknown_verb_bank_line_always_points_to_help(self):
+        parsed = parse_command("teleport", DelveState.new(self.pack, 1, "fighter"), self.pack)
+        self.assertIsInstance(parsed, ParseProblem)
+        self.assertEqual(parsed.message_key, "parse.unknown_verb")
+        line = render_event({"key": parsed.message_key, "fact_slots": parsed.fact_slots},
+                            self.pack, 1, RenderMemory())
+        self.assertTrue(line.endswith("Type ? for the list."), line)
+
+    def test_alias_line_fuzz_never_crashes_or_mutates_on_parse_problem(self):
+        state = DelveState.new(self.pack, 5, "fighter")
+        aliases = sorted({alias for _, group, _ in COMMANDS for alias in group})
+        suffixes = ("", " goblin", " ring", " to Mira", " on nameplate", " moon rock", " north")
+        rng = random.Random(612)
+        for _ in range(400):
+            line = rng.choice(aliases) + rng.choice(suffixes)
+            before = copy.deepcopy(state.snapshot())
+            parsed = parse_command(line, state, self.pack)
+            self.assertTrue(isinstance(parsed, (Action, ParseProblem)), line)
+            if isinstance(parsed, ParseProblem):
+                self.assertEqual(before, state.snapshot(), line)
+
+    def test_handover_input_replays_through_terminal_and_reveals_mira_clue(self):
+        actions = [""] + ["hit goblin"] * 6 + ["get ring", "east", "south",
+                                                     "give ring to Mira", "give Mira brass ring",
+                                                     "use ring on nameplate",
+                                                     "put brass ring in nameplate", "talk Mira", "x Mira", "q"]
+        code, output = self.play(actions, seed=1)
+        self.assertEqual(code, 0)
+        self.assertIn("Give her the brass ring", output)
+        bank = {entry.key: entry for entry in self.pack.bank}
+        self.assertTrue(any(line in output for line in bank["clue.mira"].variants))
+
+    def test_hazard_alias_message_reaches_terminal_without_engine_action(self):
+        actions = [""] + ["hit goblin"] * 6 + ["east", "east", "north", "x collapse", "q"]
+        code, output = self.play(actions, seed=1)
+        self.assertEqual(code, 0)
+        self.assertIn("This room has a falling ceiling collapse. You can shove an enemy into it.", output)
+        self.assertIn("HOLLOW VAULT", output)
+
+    def test_drink_rainwater_uses_held_offering_bowl(self):
+        actions = [""] + ["hit goblin"] * 6 + ["east", "get offering bowl", "drink rainwater", "q"]
+        code, output = self.play(actions, seed=1)
+        self.assertEqual(code, 0)
+        self.assertIn("stand straighter", output)
+        self.assertIn("COLLAPSED OBSERVATORY [near]  HP 17/24", output)
 
     def test_death_retry_increments_seed_and_quit_returns_zero(self):
         calls = ["attack", "east", "east", "north", "brace", "attack", "brace", "attack", "brace", "r", "q"]

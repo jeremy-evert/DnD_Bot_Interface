@@ -65,9 +65,13 @@ def combat_pack():
             'id': name, 'type': name, 'telegraph_key': key, 'target_zone': 'doorway',
             'effects': [{'type': 'damage', 'target': 'player', 'amount': amount}], 'counters': [],
         })
-    data['items'].append({'id': 'vault_token', 'name': 'vault token', 'reader': {
-        'on': 'use', 'event_key': 'use.nothing', 'effects': [],
+    data['items'].append({'id': 'vault_token', 'name': 'vault token', 'consumed_on_use': True, 'reader': {
+        'on': 'use', 'event_key': 'use.nothing', 'when_room_id': 'entry', 'effects': [],
     }})
+    data['items'].append({'id': 'ration', 'name': 'ration', 'consumed_on_use': True, 'reader': {
+        'on': 'use', 'event_key': 'item.ration', 'effects': [{'type':'heal','target':'player','amount':1}],
+    }})
+    data['bank']['entries'].append({'key':'item.ration','fact_slots':['item_name'],'variants':['Use {{item_name}}.'],'fallback':'Use {{item_name}}.'})
     data['rooms'][1]['objects'].append({
         'id': 'vault_token_obj', 'name': 'vault token', 'zone': 'near', 'item_id': 'vault_token',
         'reader': {'on': 'look', 'event_key': 'object.read', 'effects': []},
@@ -116,6 +120,37 @@ class CombatTests(unittest.TestCase):
         self.declare('strike'); self.scripted(1, 1, 20, 1)
         self.assertEqual(self.act('attack')[0].key, 'attack.miss')
         self.assertEqual(self.s.event_log[-3]['numbers']['margin'], -8)
+
+    def test_consumed_on_use_removes_only_after_reader_fires(self):
+        self.s.inventory.extend(['ration', 'vault_token'])
+        self.s.player['hp'] -= 1
+        fired = self.act('use', 'ration')
+        self.assertIn('item.ration', [event.key for event in fired])
+        self.assertNotIn('ration', self.s.inventory)
+        self.s.inventory.append('vault_token')
+        nothing = self.act('use', 'vault_token')
+        self.assertEqual(nothing[0].key, 'use.nothing')
+        self.assertIn('vault_token', self.s.inventory)
+
+    def test_natural_one_miss_margin_is_at_least_one_when_total_meets_ac(self):
+        self.declare('strike')
+        self.s.player['attack_bonus'] = self.e._living_enemy().stats.armor_class - 1
+        self.scripted(1, 1, 1, 1)
+        event = self.act('attack')[0]
+        self.assertEqual(event.key, 'attack.miss')
+        self.assertEqual(event.fact_slots['margin'], 1)
+
+    def test_attack_kill_emits_defeated_before_victory(self):
+        self.s.known_facts.append('captain_route')
+        self.s.enemies['captain']['hp'] = 1
+        self.declare('strike')
+        self.scripted(20, 1, 1, 1)
+        events = self.act('attack')
+        keys = [event.key for event in events]
+        self.assertLess(keys.index('attack.hit'), keys.index('enemy.defeated'))
+        self.assertLess(keys.index('enemy.defeated'), keys.index('terminal.victory'))
+        defeated = next(event for event in events if event.key == 'enemy.defeated')
+        self.assertEqual(defeated.fact_slots, {'enemy_name': 'Hobgoblin Captain'})
 
     def test_intent_brace_table_effect_damage_and_draws(self):
         enemy = self.e._living_enemy()
@@ -200,7 +235,16 @@ class CombatTests(unittest.TestCase):
         death = next(e for e in events if e.key == 'terminal.death')
         self.assertEqual(self.s.terminal, 'dead')
         self.assertEqual(death.fact_slots['cause'], 'Hobgoblin Captain strike')
+        self.assertEqual(death.fact_slots['cause_enemy'], 'Hobgoblin Captain')
+        self.assertEqual(death.fact_slots['cause_intent'], 'strike')
         self.assertIn('__player_hp_zero', self.s.flags)
+
+    def test_non_enemy_death_supplies_empty_attribution_slots(self):
+        self.s.player['hp'] = 0
+        events=[]
+        self.e._terminal_check(events)
+        death=next(event for event in events if event.key=='terminal.death')
+        self.assertEqual(death.fact_slots, {'cause':'your wounds','cause_enemy':'','cause_intent':''})
 
     def test_victory_predicate_both_orders(self):
         # Enemy dies before the fact becomes known.

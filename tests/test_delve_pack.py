@@ -8,6 +8,8 @@ from dataclasses import FrozenInstanceError, replace
 
 from delve import PackError, load_pack, validate_pack
 from delve.pack import STRUCTURAL_KEYS, check_engine_ready, load_engine_ready_pack
+from delve.commands import ParseProblem, parse_command
+from delve.state import DelveState
 
 SPEC = Path(__file__).parents[1] / 'docs' / 'DELVE_M1_SPEC.md'
 TEXT = SPEC.read_text(encoding='utf-8')
@@ -33,6 +35,7 @@ def mutation(code):
         d['rooms'][0]['objects'][0]['item_id']='test_item'
         d['rooms'][0]['objects'][1]['item_id']='test_item'
     elif code=='E_BANK_FALLBACK_MISSING_TAKEABLE': d['rooms'][0]['objects'][0]['item_id']='test_item'; d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]}}); d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='get.blocked']
+    elif code=='E_ITEM_CONSUMED_TYPE': d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]},'consumed_on_use':'yes'})
     return d
 
 class PackTests(unittest.TestCase):
@@ -62,6 +65,31 @@ class PackTests(unittest.TestCase):
 
     def test_E_ITEM_UNKNOWN(self): self._reject('E_ITEM_UNKNOWN')
     def test_E_ITEM_DUPLICATE_SOURCE(self): self._reject('E_ITEM_DUPLICATE_SOURCE')
+    def test_consumed_on_use_must_be_boolean(self):
+        with self.assertRaises(PackError) as cm: load_pack(mutation('E_ITEM_CONSUMED_TYPE'))
+        self.assertEqual(cm.exception.code, 'E_SCHEMA')
+
+    def test_consumed_on_use_defaults_false(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]}})
+        self.assertFalse(load_pack(d).items[0].consumed_on_use)
+
+    def test_parser_problems_are_bank_events_with_slots(self):
+        pack=load_pack(EXAMPLE); state=DelveState.new(pack,1,'fighter')
+        unknown=parse_command('look moon rock',state,pack)
+        self.assertIsInstance(unknown,ParseProblem)
+        self.assertEqual((unknown.message_key,unknown.fact_slots),('target.unknown',{'target':'moon rock'}))
+        state.room_id='entry'
+        from delve.model import GameObject, Reader
+        room=next(r for r in pack.rooms if r.id=='entry')
+        expanded=replace(room,objects=room.objects+(GameObject('stone_compass','stone compass','near',Reader('look','object.read',())),))
+        pack=replace(pack,rooms=tuple(expanded if r.id=='entry' else r for r in pack.rooms))
+        state.present_objects['entry'].append('stone_compass')
+        ambiguous=parse_command('look s',state,pack)
+        self.assertEqual(ambiguous.message_key,'target.ambiguous')
+        self.assertEqual(ambiguous.fact_slots['candidates'],'star chart, stone compass')
+        verb=parse_command('dance',state,pack)
+        self.assertEqual((verb.message_key,verb.fact_slots),('parse.unknown_verb',{'verb':'dance'}))
     def test_takeable_object_requires_interaction_fallbacks(self):
         with self.assertRaises(PackError) as cm: load_pack(mutation('E_BANK_FALLBACK_MISSING_TAKEABLE'))
         self.assertEqual(cm.exception.code,'E_BANK_FALLBACK_MISSING')
@@ -182,6 +210,8 @@ class PackTests(unittest.TestCase):
         self.assertEqual(emitted-set(STRUCTURAL_KEYS),set())
         for suffix in ('victory','death','closed'):
             self.assertIn('terminal.'+suffix,STRUCTURAL_KEYS)
+        self.assertNotIn('combat.not_yet', STRUCTURAL_KEYS)  # Amendment 4 item 8 retires this key.
+        self.assertTrue({'enemy.defeated','target.ambiguous','parse.unknown_verb'} <= STRUCTURAL_KEYS.keys())
 
 # Exercise semantic validation independently of the strict public loader.
 def load_unvalidated(d):

@@ -81,7 +81,7 @@ class MovementTests(unittest.TestCase):
         self.assertEqual(again,[])
 
     def test_terminal_and_m1_combat_stub(self):
-        self.assertEqual(self.apply('attack')[0].key,'combat.not_yet')
+        self.assertEqual(self.apply('attack')[0].key,'target.unknown')  # Amendment 4 item 8 retires combat.not_yet.
         self.assertEqual(self.state.rng_draws,0)
         self.state.player['hp']=0
         self.state.flags.add('__player_hp_zero')

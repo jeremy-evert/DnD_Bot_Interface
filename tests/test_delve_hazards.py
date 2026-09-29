@@ -35,11 +35,11 @@ def make_pack():
                      'event_key': 'hazard.collapse', 'trigger': {'action': 'shove', 'requires_flag_id': 'captain_route_known'},
                      'effects': [{'type': 'damage', 'target': 'enemy', 'amount': 6}]}]
     d['items'] = [
-        {'id': 'clay_cup', 'name': 'clay cup', 'reader': {'on': 'throw', 'event_key': 'item.use', 'effects': []}, 'throw_tags': ['interrupt_grab']},
-        {'id': 'silver_leaf', 'name': 'silver leaf', 'reader': {'on': 'throw', 'event_key': 'item.use', 'effects': []}, 'throw_tags': ['interrupt_guard']},
+        {'id': 'clay_cup', 'name': 'clay cup', 'reader': {'on': 'throw', 'event_key': 'throw.cup', 'effects': []}, 'throw_tags': ['interrupt_grab']},
+        {'id': 'silver_leaf', 'name': 'silver leaf', 'reader': {'on': 'throw', 'event_key': 'throw.leaf', 'effects': []}, 'throw_tags': ['interrupt_guard']},
     ]
-    if 'item.use' not in keys:
-        d['bank']['entries'].append({'key':'item.use','fact_slots':['item_name'],'variants':['{{item_name}}'],'fallback':'{{item_name}}'})
+    for key in ('throw.cup', 'throw.leaf'):
+        d['bank']['entries'].append({'key':key,'fact_slots':['item_name'],'variants':['{{item_name}}'],'fallback':'{{item_name}}'})
     return load_pack(d)
 
 
@@ -100,20 +100,23 @@ class HazardTests(unittest.TestCase):
         self.s.inventory.append('clay_cup'); self.s.enemies['captain']['current_intent_id'] = 'grab'
         before = self.s.rng_draws; events = self.act('throw', 'clay_cup')
         self.assertEqual(self.s.rng_draws-before, 0); self.assertNotIn('clay_cup', self.s.inventory)
-        self.assertIn('throw.interrupt', [e.key for e in events])
+        self.assertEqual([e.key for e in events if e.key.startswith('throw.') or e.key == 'intent.cancelled'],
+                         ['throw.cup', 'intent.cancelled'])  # Amendment 4 item 2: reader owns the single throw line.
+        self.assertEqual(events[0].fact_slots, {'item_name': 'clay cup'})
         self.s.inventory.append('silver_leaf'); self.s.enemies['captain']['current_intent_id'] = 'guard'
         before = self.s.rng_draws; events = self.act('throw', 'silver_leaf')
         self.assertEqual(self.s.rng_draws-before, 0); self.assertNotIn('silver_leaf', self.s.inventory)
         self.assertNotIn('enemy.hit', [e.key for e in events])
         self.s.inventory.append('clay_cup'); self.s.enemies['captain']['current_intent_id'] = 'strike'
         before = self.s.rng_draws; events = self.act('throw', 'clay_cup')
-        self.assertEqual(self.s.rng_draws-before, 2); self.assertIn('throw.fizzle', [e.key for e in events]); self.assertNotIn('clay_cup', self.s.inventory)
+        self.assertEqual(self.s.rng_draws-before, 2); self.assertIn('throw.fizzle', [e.key for e in events]); self.assertEqual(events[0].fact_slots, {'item_name':'clay cup'}); self.assertNotIn('clay_cup', self.s.inventory)
         before = self.s.rng_draws; inv = list(self.s.inventory); events = self.act('throw', 'missing')
         self.assertEqual(self.s.rng_draws, before); self.assertEqual(self.s.inventory, inv); self.assertEqual(events[0].key, 'target.unknown')
         # An unheld item and a room without a living enemy are explanatory no-ops.
         self.s.enemies['captain']['hp'] = 0; self.s.inventory.append('clay_cup')
         snap = self.s.snapshot(); events = self.act('throw', 'clay_cup')
-        self.assertEqual(events[0].key, 'combat.not_yet'); self.assertEqual(self.s.snapshot()['rng_draws'], snap['rng_draws'])
+        self.assertEqual(events[0].key, 'target.unknown')  # Amendment 4 item 8 retires combat.not_yet.
+        self.assertEqual(self.s.snapshot()['rng_draws'], snap['rng_draws'])
         self.assertIn('clay_cup', self.s.inventory)
 
     def test_hazard_tag_matrix_and_cover(self):
@@ -145,6 +148,16 @@ class HazardTests(unittest.TestCase):
         global_state = random.getstate()
         self.act('shove', 'captain')
         self.assertEqual(self.s.terminal, 'victory'); self.assertEqual(self.s.rng_draws, 0); self.assertEqual(random.getstate(), global_state)
+
+    def test_hazard_kill_emits_enemy_defeated_before_victory(self):
+        self.s.flags.add('captain_route_known')
+        self.s.known_facts.append('captain_route')
+        self.s.enemies['captain']['hp'] = 6
+        self.s.enemies['captain']['current_intent_id'] = 'smash'
+        events = self.act('shove', 'captain')
+        keys = [event.key for event in events]
+        self.assertLess(keys.index('hazard.trigger'), keys.index('enemy.defeated'))
+        self.assertLess(keys.index('enemy.defeated'), keys.index('terminal.victory'))
 
     def test_mixed_action_fuzz_never_raises(self):
         chooser = random.Random(4)

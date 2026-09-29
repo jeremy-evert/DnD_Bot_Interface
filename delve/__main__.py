@@ -52,12 +52,15 @@ def main(argv=None):
                 return 0
             parsed = parse_command(line, state, pack)
             if isinstance(parsed, ParseProblem):
-                print(parsed.text)
+                if parsed.message_key == "command.empty":
+                    print(parsed.text)
+                else:
+                    print(render_event({"key": parsed.message_key, "fact_slots": parsed.fact_slots}, pack, seed, memory))
                 continue
             try:
                 events = engine.apply(parsed)
                 for event in events:
-                    if event.key in ("terminal.death", "terminal.victory"):
+                    if event.key in ("terminal.death", "terminal.victory") or event.type == "enemy_intent":
                         continue
                     print(render_event(event, pack, seed, memory))
                 if state.terminal == "dead":

@@ -89,13 +89,11 @@ class DelveTerminalTests(unittest.TestCase):
         ambiguous = parse_command("look s", state, self.pack)
         unknown = parse_command("get moon rock", state, self.pack)
         self.assertIsInstance(ambiguous, ParseProblem)
-        self.assertIn("Ambiguous", ambiguous.text)
+        self.assertEqual(ambiguous.message_key, "target.ambiguous")
+        self.assertEqual(ambiguous.fact_slots["candidates"], "stone compass, star chart")
         self.assertIsInstance(unknown, ParseProblem)
-        self.assertIn("No object", unknown.text)
+        self.assertEqual((unknown.message_key, unknown.fact_slots), ("target.unknown", {"target": "moon rock"}))
         self.assertEqual(before, state.snapshot())
-        _, output = self.play(["", "attack", "east", "east", "look s", "get moon rock", "q"])
-        self.assertIn("Ambiguous target", output)
-        self.assertIn("No object matches", output)
 
     def test_death_retry_increments_seed_and_quit_returns_zero(self):
         calls = ["attack", "east", "east", "north", "brace", "attack", "brace", "attack", "brace", "r", "q"]

@@ -10,11 +10,12 @@ STRUCTURAL_KEYS = {
     'room.enter': 'always', 'room.return': 'always',
     'move.blocked': 'always', 'move.no_exit': 'always',
     'target.unknown': 'always', 'object.read': 'always', 'inventory': 'always',
-    'help': 'always', 'terminal.quit': 'always', 'combat.not_yet': 'always',
+    'help': 'always', 'terminal.quit': 'always', 'parse.unknown_verb': 'always',
+    'target.ambiguous': 'always',
     'attack.hit': 'enemies', 'attack.miss': 'enemies',
     'brace.success': 'enemies', 'brace.wasted': 'enemies',
     'shove.success': 'enemies', 'shove.fail': 'enemies',
-    'throw.fizzle': 'enemies', 'throw.interrupt': 'enemies',
+    'throw.fizzle': 'enemies', 'throw.interrupt': 'enemies', 'enemy.defeated': 'enemies',
     'intent.cancelled': 'enemies', 'enemy.hit': 'enemies', 'enemy.miss': 'enemies',
     'retreat.blocked': 'enemies',
     'get.blocked': 'takeable_objects', 'get.not_takeable': 'takeable_objects',
@@ -178,7 +179,9 @@ def _parse(d):
         clocks.append(m.Clock(_id(x['id'],p+'.id'),_str(x['label'],p+'.label'),_int(x['max'],p+'.max',1),_int(x['start'],p+'.start'),tuple(ts),tuple(th)))
     items=[]
     for i,x in enumerate(_arr(d['items'],'$.items')):
-        p=f'$.items[{i}]'; _obj(x,p,('id','name','reader'),('throw_tags',)); items.append(m.Item(_id(x['id'],p+'.id'),_str(x['name'],p+'.name'),_reader(x['reader'],p+'.reader'),_strings(x.get('throw_tags',[]),p+'.throw_tags',lambda a,b:_str(a,b))))
+        p=f'$.items[{i}]'; _obj(x,p,('id','name','reader'),('throw_tags','consumed_on_use'))
+        consumed=_bool(x['consumed_on_use'],p+'.consumed_on_use') if 'consumed_on_use' in x else False
+        items.append(m.Item(_id(x['id'],p+'.id'),_str(x['name'],p+'.name'),_reader(x['reader'],p+'.reader'),_strings(x.get('throw_tags',[]),p+'.throw_tags',lambda a,b:_str(a,b)),consumed))
     truth=d['truth']; _obj(truth,'$.truth',('facts','clues')); facts=[]
     for i,x in enumerate(_arr(truth['facts'],'$.truth.facts')):
         p=f'$.truth.facts[{i}]'; _obj(x,p,('id','payoff','clue_ids','payoff_effects'),('label',)); facts.append(m.Fact(_id(x['id'],p+'.id'),_bool(x['payoff'],p+'.payoff'),_strings(x['clue_ids'],p+'.clue_ids'),_effects(x['payoff_effects'],p+'.payoff_effects'),_str(x['label'],p+'.label') if 'label' in x else None))

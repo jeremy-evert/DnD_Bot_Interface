@@ -91,6 +91,21 @@ def _slot_value(entry, slots, key, memory):
     return _fill(text or _get(entry, "fallback", ""), slots, memory, key)
 
 
+def _fixed_slot_value(entry, seed, slots, key, memory):
+    """Render a status line from a stable private namespace without no-repeat state."""
+    declared = tuple(_get(entry, "fact_slots", ()))
+    variants = tuple(_get(entry, "variants", ()))
+    fallback = _get(entry, "fallback", "")
+    if set(declared) != set(slots) or not variants:
+        return _fill(fallback, slots, memory, key)
+    canonical = _canonical_slots(slots)
+    digest = hashlib.sha256(f"{seed}|status|{key}|{canonical}".encode("utf-8")).hexdigest()
+    template = variants[int(digest, 16) % len(variants)]
+    if any(name not in slots for name in _SLOT.findall(template)):
+        template = fallback
+    return _fill(template, slots, memory, key)
+
+
 def _bar(value, maximum):
     value = max(0, min(int(value), int(maximum)))
     return "#" * value + "." * (int(maximum) - value)
@@ -133,7 +148,7 @@ def render_status(state, pack, memory=None):
             telegraph_entry = bank.get(_get(intent, "telegraph_key"))
             if telegraph_entry:
                 enemy_name = _get(enemy, "name")
-                telegraph = _slot_value(telegraph_entry, {"enemy_name": enemy_name}, _get(intent, "telegraph_key"), memory)
+                telegraph = _fixed_slot_value(telegraph_entry, _get(state, "seed", 0), {"enemy_name": enemy_name}, _get(intent, "telegraph_key"), memory)
                 doubled = f"{enemy_name}: {enemy_name}"
                 if telegraph.casefold().startswith(doubled.casefold()):
                     telegraph = f"{enemy_name}:" + telegraph[len(doubled):]
@@ -161,11 +176,8 @@ def render_status(state, pack, memory=None):
         hazards = [h for h in _get(pack, "hazards", ()) if _get(h, "room_id") == _get(room, "id")]
         if hazards:
             hazard = hazards[0]
-            lines.append(f"Hazard: {_get(hazard, 'tag').upper()} [{_get(hazard, 'zone')}].  Objects: " + "; ".join(f"{_get(o, 'name')} [{_get(o, 'zone')}]" for o in present_objects) + ".")
-        elif present_objects:
-            lines.append("Objects: " + "; ".join(f"{_get(o, 'name')} [{_get(o, 'zone')}]" for o in present_objects) + ".")
-    elif present_objects:
-        lines[-1] += " " + "; ".join(f"{_get(o, 'name')} [{_get(o, 'zone')}]" for o in present_objects) + "."
+            lines.append(f"Hazard: {_get(hazard, 'tag').upper()} [{_get(hazard, 'zone')}].")
+    lines.append("Objects: " + ("; ".join(f"{_get(o, 'name')} [{_get(o, 'zone')}]" for o in present_objects) or "none") + ".")
     return "\n".join(lines)
 
 
@@ -198,6 +210,5 @@ def render_victory(event, pack=None, seed=0, memory=None):
     entry = bank.get(event_key)
     if entry:
         line = render_event(event, pack, seed, memory)
-        return f"VAULT CLEARED — {line}\nThe bell, chart, and dome now agree about what happened here.\n[r]etry or [q]uit"
-    return ("VAULT CLEARED — You read the route, dropped the dome, and broke the Captain's guard.\n"
-            "The bell, chart, and dome now agree about what happened here.\n[r]etry or [q]uit")
+        return f"VAULT CLEARED — {line}\n[r]etry or [q]uit"
+    return "VAULT CLEARED —\n[r]etry or [q]uit"

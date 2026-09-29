@@ -71,7 +71,7 @@ class Clock:
     id: str; label: str; max: int; start: int; tick_sources: tuple[ClockSource,...]; thresholds: tuple[Threshold,...]
 @dataclass(frozen=True)
 class Item:
-    id: str; name: str; reader: Reader; throw_tags: tuple[str,...]=()
+    id: str; name: str; reader: Reader; throw_tags: tuple[str,...]=(); consumed_on_use: bool=False
 @dataclass(frozen=True)
 class Fact:
     id: str; payoff: bool; clue_ids: tuple[str,...]; payoff_effects: tuple[Effect,...]; label: str|None=None

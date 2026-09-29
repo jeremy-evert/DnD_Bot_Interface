@@ -5,7 +5,10 @@ import re
 import time
 import unittest
 from pathlib import Path
+from io import StringIO
+from unittest.mock import patch
 
+from delve import __main__ as terminal
 from delve.pack import load_pack
 from delve.render import (RenderMemory, render_death, render_event, render_help,
                           render_status, render_victory, select_variant)
@@ -110,7 +113,7 @@ class DelveRenderTests(unittest.TestCase):
         state.clocks["patrol"] = 2
         self.assertEqual(render_status(state,self.pack),
             "MOSSY ENTRY [near]  HP 24/24  PATROL [##..]  Exits: E\n"
-            "Rain taps the cracked stone. Bell [near]; chart [far]; dome [doorway].")
+            "Rain taps the cracked stone.\nObjects: Bell [near]; chart [far]; dome [doorway].")
         state.room_id = "vault"
         state.player.update(hp=17, zone="doorway")
         state.clocks["patrol"] = 3
@@ -118,7 +121,7 @@ class DelveRenderTests(unittest.TestCase):
         self.assertEqual(render_status(state,self.pack),
             "HOLLOW VAULT [doorway]  HP 17/24  PATROL [###.]  Exits: W\n"
             "Hobgoblin Captain 18/18 HP [doorway] — The Captain winds up to SMASH the doorway — brace or shove!\n"
-            "Hazard: COLLAPSE [hazard].  Objects: brass ring [near].")
+            "Hazard: COLLAPSE [hazard].\nObjects: brass ring [near].")
 
     def test_help_death_victory_and_clock_bars(self):
         self.assertEqual(render_help(), "HELP — n/s/e/w move; x <thing> read; i inventory; a attack; sh <enemy> shove;\n"
@@ -129,9 +132,68 @@ class DelveRenderTests(unittest.TestCase):
         self.assertIn("YOU DIED — The Captain's SMASH broke through because of the Captain's SMASH.",death)
         self.assertIn("Retry hint: brace the declared smash, or shove him beneath the collapse.",death)
         self.assertIn("[r]etry or [q]uit",death)
-        self.assertIn("VAULT CLEARED —",render_victory({"key":"terminal.victory","fact_slots":{}},self.pack))
+        victory = render_victory({"key":"terminal.victory","fact_slots":{}},self.pack)
+        self.assertEqual(victory.count("\n"), 1)  # Amendment 4 item 6: only bank text and retry prompt.
+        self.assertIn("VAULT CLEARED —",victory)
         from delve.render import _bar
         self.assertEqual([_bar(i,4) for i in range(5)], ["....","#...","##..","###.","####"])
+
+    def test_status_telegraph_does_not_rotate_and_objects_are_labeled(self):
+        data = copy.deepcopy(EXAMPLE)
+        entry = next(e for e in data['bank']['entries'] if e['key'] == 'intent.captain.smash')
+        entry['fact_slots'] = ['enemy_name']
+        entry['variants'] = ['{{enemy_name}}: First.', '{{enemy_name}}: Second.']
+        entry['fallback'] = '{{enemy_name}}: First.'
+        pack = load_pack(data)
+        state = DelveState.new(pack, 27, 'fighter')
+        state.room_id = 'vault'; state.player['zone'] = 'doorway'
+        memory = RenderMemory()
+        first = render_status(state, pack, memory)
+        second = render_status(state, pack, memory)
+        self.assertEqual(first, second)  # Amendment 4 item 7: stable status wording.
+        self.assertIn('Objects:', first)
+        self.assertNotIn('brass ring [near]', first.splitlines()[1])
+
+    def test_terminal_shows_one_stable_telegraph_per_turn(self):
+        data = copy.deepcopy(EXAMPLE)
+        entry = next(e for e in data['bank']['entries'] if e['key'] == 'intent.captain.smash')
+        entry['fact_slots'] = ['enemy_name']
+        entry['variants'] = ['{{enemy_name}}: First threat.', '{{enemy_name}}: Second threat.']
+        entry['fallback'] = '{{enemy_name}}: First threat.'
+        data['enemies'][0]['intent_cycle'] = ['smash']
+        pack = load_pack(data)
+        output = StringIO()
+        with patch('delve.__main__.load_engine_ready_pack', return_value=pack), \
+             patch('builtins.input', side_effect=['east', 'brace', 'q']), \
+             patch('sys.stdout', output):
+            self.assertEqual(terminal.main(['--seed', '37', '--class', 'fighter']), 0)
+        transcript = output.getvalue()
+        # Amendment 4 item 7: declaration events are not printed; status owns one stable line per turn.
+        threat_lines = [line for line in transcript.splitlines() if 'threat.' in line]
+        self.assertEqual(len(threat_lines), 2)
+        self.assertEqual(threat_lines[0], threat_lines[1])
+
+    def test_terminal_renders_parser_problems_from_the_bank(self):
+        data = copy.deepcopy(EXAMPLE)
+        data['rooms'][0]['objects'].extend([
+            {'id':'brass_bell','name':'brass bell','zone':'near','reader':{'on':'look','event_key':'object.read','effects':[]}},
+            {'id':'brass_bowl','name':'brass bowl','zone':'near','reader':{'on':'look','event_key':'object.read','effects':[]}},
+        ])
+        data['bank']['entries'].extend([
+            {'key':'target.unknown','fact_slots':['target'],'variants':['Unknown {{target}}.'],'fallback':'Unknown {{target}}.'},
+            {'key':'target.ambiguous','fact_slots':['target','candidates'],'variants':['{{target}}: {{candidates}}.'],'fallback':'{{target}}: {{candidates}}.'},
+            {'key':'parse.unknown_verb','fact_slots':['verb'],'variants':['Verb {{verb}}?'],'fallback':'Verb {{verb}}?'},
+        ])
+        pack = load_pack(data)
+        output = StringIO()
+        with patch('delve.__main__.load_engine_ready_pack', return_value=pack), \
+             patch('builtins.input', side_effect=['look nowhere', 'look brass', 'dance', 'q']), \
+             patch('sys.stdout', output):
+            self.assertEqual(terminal.main(['--seed', '2', '--class', 'fighter']), 0)
+        transcript = output.getvalue()
+        self.assertIn('Unknown nowhere.', transcript)
+        self.assertIn('brass: brass bell, brass bowl.', transcript)
+        self.assertIn('Verb dance?', transcript)
 
     def test_latency(self):
         state = DelveState.new(self.pack, 1, "fighter")

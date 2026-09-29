@@ -100,21 +100,22 @@ class Engine:
         elif verb in ('get','take','g'):
             events.extend(self._get(action.target_id))
         elif verb in ('use','u'):
+            held = action.target_id in s.inventory
             events.extend(self._use(action.target_id))
-            valid = bool(action.target_id in s.inventory)
+            valid = held
             if valid and foe_at_start and intent_at_start:
                 self._finish_round(foe_at_start, intent_at_start, events)
         elif verb in ('attack','shove','brace','throw','retreat'):
             if verb == 'attack':
                 if not foe_at_start or not intent_at_start:
-                    events.append(self._event('combat.not_yet')); valid=False
+                    events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
                     self._attack(foe_at_start, intent_at_start, events)
                     if self._living_enemy() is foe_at_start:
                         self._finish_round(foe_at_start, intent_at_start, events)
             elif verb == 'brace':
                 if not foe_at_start or not intent_at_start:
-                    events.append(self._event('combat.not_yet')); valid=False
+                    events.append(self._event('target.unknown', {'target': 'enemy'})); valid=False
                 else:
                     counter = self._brace(foe_at_start, intent_at_start, events)
                     if counter != 'cancel' and self._living_enemy() is foe_at_start:
@@ -125,7 +126,7 @@ class Engine:
                 if not self._retreat(action.direction, foe_at_start, intent_at_start, events): valid=False
             elif verb == 'shove':
                 if not foe_at_start or not intent_at_start:
-                    events.append(self._event('combat.not_yet')); valid=False
+                    events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
                     result = self._shove(foe_at_start, intent_at_start, events)
                     if result == 'resolve' and self._living_enemy() is foe_at_start:
@@ -136,7 +137,7 @@ class Engine:
                 if action.target_id not in s.inventory:
                     events.append(self._event('target.unknown', {'target': action.target_id or ''})); valid=False
                 elif not foe_at_start or not intent_at_start:
-                    events.append(self._event('combat.not_yet')); valid=False
+                    events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
                     if not self._throw(action.target_id, foe_at_start, intent_at_start, events): valid=False
                     elif self._living_enemy() is foe_at_start:
@@ -146,7 +147,7 @@ class Engine:
                         else:
                             self._advance_and_declare(foe_at_start, events)
             else:
-                events.append(self._event('combat.not_yet')); valid=False
+                events.append(self._event('target.unknown', {'target': 'enemy'})); valid=False
         else:
             events.append(self._event('target.unknown', {'target': action.target_id or verb}))
         if valid:
@@ -184,9 +185,11 @@ class Engine:
             damage=max(1,damage_die+s.player['damage_bonus'])
             st['hp']=max(0,st['hp']-damage); st['alive']=st['hp']>0
             events.append(self._event('attack.hit',{'enemy_name':enemy.name,'damage':damage},numbers={'roll':die,'total':total,'damage':damage}))
-            if not st['alive']: st['current_intent_id']=None
+            if not st['alive']:
+                st['current_intent_id']=None
+                events.append(self._event('enemy.defeated', {'enemy_name': enemy.name}))
         else:
-            events.append(self._event('attack.miss',{'margin':abs(margin)},numbers={'roll':die,'total':total,'margin':margin}))
+            events.append(self._event('attack.miss',{'margin':max(1, ac-total)},numbers={'roll':die,'total':total,'margin':margin}))
 
     def _brace(self, enemy, intent, events):
         if intent.type=='strike':
@@ -233,14 +236,15 @@ class Engine:
         self.state.inventory.remove(item_id)
         matching = ('interrupt_any' in item.throw_tags or f'interrupt_{intent.type}' in item.throw_tags)
         if not matching:
-            events.append(self._event('throw.fizzle'))
+            events.append(self._event('throw.fizzle', {'item_name': item.name}))
             return True
         reader = item.reader
         if reader.on == 'throw' and self._reader_ready(reader):
             events.append(self._event(reader.event_key, {'item_name': item.name}))
             self._effects(reader.effects, events)
-        events.append(self._event('throw.interrupt'))
-        events.append(self._event('intent.cancelled'))
+        else:
+            events.append(self._event('throw.interrupt', {'item_name': item.name}))
+        events.append(self._event('intent.cancelled', {'enemy_name': enemy.name}))
         # Reader effects may contain interrupt_intent; enforce interruption from the tag too.
         self.state.enemies[enemy.id]['current_intent_id'] = None
         return True
@@ -292,6 +296,8 @@ class Engine:
                 if s.player['hp']==0:
                     s.flags.add('__player_hp_zero')
                     self._last_death_cause=f'{enemy.name} {intent.type}'
+                    self._last_death_enemy=enemy.name
+                    self._last_death_intent=intent.type
                 events.append(self._event('enemy.hit',{'enemy_name':enemy.name,'damage':damage},numbers={'roll':roll,'total':total,'damage':damage}))
         for effect in intent.effects:
             if effect.type!='damage': self._effects([effect],events)
@@ -342,6 +348,8 @@ class Engine:
         if reader.on != 'use' or not self._reader_ready(reader): return [self._event('use.nothing')]
         events = [self._event(reader.event_key, {'item_name': item.name})]
         self._effects(reader.effects, events)
+        if item.consumed_on_use and target in self.state.inventory:
+            self.state.inventory.remove(target)
         return events
 
     def _effects(self, effects, events):
@@ -354,7 +362,12 @@ class Engine:
                 elif e.target == 'enemy':
                     foe=self._living_enemy()
                     if foe:
-                        ent=s.enemies[foe.id]; ent['hp']=max(0,ent['hp']-e.amount); ent['alive']=ent['hp']>0
+                        ent=s.enemies[foe.id]
+                        was_alive=ent['hp']>0
+                        ent['hp']=max(0,ent['hp']-e.amount); ent['alive']=ent['hp']>0
+                        if was_alive and not ent['alive']:
+                            ent['current_intent_id']=None
+                            events.append(self._event('enemy.defeated', {'enemy_name': foe.name}))
             elif e.type == 'heal': s.player['hp'] = min(s.player['max_hp'], s.player['hp'] + e.amount)
             elif e.type == 'tick_clock': self._tick(e.clock_id, e.amount, events)
             elif e.type == 'move_zone':
@@ -409,7 +422,11 @@ class Engine:
             if terminal.kind in ('death','dead') and s.player['hp'] <= 0:
                 s.terminal='dead'
                 cause=getattr(self,'_last_death_cause','your wounds')
-                events.append(self._event('terminal.death', {'cause':cause})); return
+                events.append(self._event('terminal.death', {
+                    'cause': cause,
+                    'cause_enemy': getattr(self, '_last_death_enemy', ''),
+                    'cause_intent': getattr(self, '_last_death_intent', ''),
+                })); return
         for terminal in self.pack.terminals:
             if terminal.kind != 'victory': continue
             if all(self._predicate(p) for p in terminal.all):

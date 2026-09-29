@@ -45,6 +45,10 @@ for _mode, _definition in JUDGE_MODES.items():
 class JudgeParseError(ValueError):
     """Judge output did not contain one unambiguous JSON candidate list."""
 
+    def __init__(self, message, code="MALFORMED"):
+        super().__init__(message)
+        self.code = code
+
 
 def _turn_text(record):
     inputs = record.get("input_calls", [])
@@ -163,27 +167,55 @@ def _parse_verifier(text):
 
 
 def verify_supported(records, accepted, run_dir=None, verifier_cmd=None,
-                     model="gpt-6-sol", effort="high", timeout=600, verifier=None):
+                     model="gpt-6-sol", effort="high", timeout=600, verifier=None,
+                     bundle_sha256=None):
     """Return verified and unsupported records; callbacks make tests deterministic."""
     verified, unsupported = [], []
+    if bundle_sha256 is None:
+        bundle_sha256 = hashlib.sha256(build_judge_bundle(records).encode("utf-8")).hexdigest()
     for candidate in accepted:
         verifier_receipt_sha256 = None
         audit_status, audit_events_seen = "UNVERIFIABLE", 0
+        candidate_hash = hashlib.sha256(canonical_json(candidate).encode("utf-8")).hexdigest()
         if verifier is not None:
             result = verifier(records, candidate)
             error = None
             if isinstance(result, dict):
-                verifier_receipt_sha256 = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                receipt_candidate_hash = result.get("candidate_sha256", candidate_hash)
+                receipt_bundle_hash = result.get("bundle_sha256", bundle_sha256)
+                verifier_receipt_sha256 = hashlib.sha256(canonical_json({
+                    "candidate_sha256": receipt_candidate_hash, "bundle_sha256": receipt_bundle_hash,
+                    "result": result}).encode("utf-8")).hexdigest()
+                if receipt_candidate_hash != candidate_hash or receipt_bundle_hash != bundle_sha256:
+                    error = "verifier receipt binding mismatch"
         else:
             base = Path(run_dir or tempfile.mkdtemp(prefix="playtest-verifier-"))
             verifier_dir = base / f"verify-{len(verified)+len(unsupported):02d}"
             receipt = run_verifier(records, candidate, verifier_dir,
-                                   verifier_cmd, model, effort, timeout)
+                                   verifier_cmd, model, effort, timeout, bundle_sha256=bundle_sha256)
             result = receipt.get("result")
             error = receipt.get("parse_error") or (None if receipt.get("outcome") == "COMPLETE" else receipt.get("outcome"))
             receipt_path = verifier_dir / "judge_receipt.json"
             if receipt_path.exists(): verifier_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
             audit_status, audit_events_seen = receipt.get("audit_status", "UNVERIFIABLE"), receipt.get("audit_events_seen", 0)
+            if (receipt.get("candidate_sha256") != candidate_hash or
+                    receipt.get("bundle_sha256") != bundle_sha256):
+                error = "verifier receipt binding mismatch"
+        if audit_status == "VIOLATED":
+            unsupported.append({"candidate": candidate, "reason_code": "BLINDNESS_VIOLATED",
+                                "reason": "verifier read audit detected a forbidden source", "audit_status": audit_status,
+                                "audit_events_seen": audit_events_seen})
+            continue
+        if audit_status != "CLEAN" and verifier is None:
+            unsupported.append({"candidate": candidate, "reason_code": "AUDIT_UNVERIFIABLE",
+                                "reason": "verifier event stream was empty or unrecognized", "audit_status": audit_status,
+                                "audit_events_seen": audit_events_seen})
+            continue
+        if error and error == "verifier receipt binding mismatch":
+            unsupported.append({"candidate": candidate, "reason_code": "VERIFIER_BINDING_MISMATCH",
+                                "reason": error, "audit_status": audit_status,
+                                "audit_events_seen": audit_events_seen})
+            continue
         if error or not isinstance(result, dict) or result.get("supports") is not True:
             unsupported.append({"candidate": candidate, "reason_code": "JUDGE_UNVERIFIED",
                                 "reason": (result or {}).get("reason", "verifier unavailable") if isinstance(result, dict) else str(error or "invalid verifier result"),
@@ -208,14 +240,19 @@ def counted_instances(result):
     return [item["candidate"] for item in result.get("verified", [])]
 
 
-def run_verifier(records, candidate, run_dir, verifier_cmd=None, model="gpt-6-sol", effort="high", timeout=600):
-    """Run an isolated second content judgment; timeout or error stays incomplete."""
+def run_verifier(records, candidate, run_dir, verifier_cmd=None, model="gpt-6-sol", effort="high", timeout=600,
+                 *, bundle_sha256=None):
+    """Use temporary-cwd packaging isolation only; reads are audited, not enforced."""
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     prompt = build_verifier_prompt(records, candidate)
+    if bundle_sha256 is None:
+        bundle_sha256 = hashlib.sha256(build_judge_bundle(records).encode("utf-8")).hexdigest()
+    candidate_sha256 = hashlib.sha256(canonical_json(candidate).encode("utf-8")).hexdigest()
     prompt_path = run_dir / "verifier_prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
-    receipt = {"prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(), "model": model,
+    receipt = {"prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+               "candidate_sha256": candidate_sha256, "bundle_sha256": bundle_sha256, "model": model,
                "effort": effort, "exit_code": None, "timeout": False, "outcome": "INCOMPLETE",
                "result": None}
     try:
@@ -231,14 +268,15 @@ def run_verifier(records, candidate, run_dir, verifier_cmd=None, model="gpt-6-so
                     receipt["timeout"] = True
             receipt.update(exit_code=process.returncode, stdout=stdout.decode("utf-8", "replace"),
                            stderr=stderr.decode("utf-8", "replace"))
-            receipt["audit_status"], receipt["audit_events_seen"] = _audit_stream(receipt["stdout"])
+            receipt["audit_status"], receipt["audit_events_seen"] = _audit_stream(receipt["stdout"], capsule_path=empty_cwd)
         if receipt["timeout"]:
             receipt["parse_status"] = "TIMEOUT"
         elif process.returncode:
             receipt["parse_status"] = "PROCESS_ERROR"
         else:
             try:
-                result = _parse_verifier(_last_assistant_text(receipt["stdout"]))
+                result = _parse_verifier(_last_assistant_text(receipt["stdout"],
+                                            allow_implicit_completion=verifier_cmd is not None))
                 receipt.update(result=result, parse_status="OK", outcome="COMPLETE")
             except (ValueError, json.JSONDecodeError) as exc:
                 receipt.update(parse_status="MALFORMED", parse_error=str(exc))
@@ -253,14 +291,15 @@ def parse_judge_output(text):
     if not isinstance(text, str):
         raise JudgeParseError("judge output must be text")
     import re
+    duplicate_error = None
     fences = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.I)
     for block in reversed(fences):
         try:
             value = strict_json_loads(block.strip())
             if isinstance(value, list):
                 return value
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            if "duplicate JSON key" in str(exc): duplicate_error = exc
     decoder = json.JSONDecoder()
     arrays = []
     depth, start, quoted, escaped = 0, None, False, False
@@ -283,8 +322,10 @@ def parse_judge_output(text):
                     value = strict_json_loads(text[start:index + 1])
                     if isinstance(value, list) and end == index + 1 - start:
                         arrays.append(value)
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                except (json.JSONDecodeError, ValueError) as exc:
+                    if "duplicate JSON key" in str(exc): duplicate_error = exc
+    if duplicate_error is not None:
+        raise JudgeParseError(str(duplicate_error), "DUPLICATE_JSON_KEY")
     if arrays:
         return arrays[-1]
     raise JudgeParseError("no valid top-level JSON array found")
@@ -295,7 +336,7 @@ def codex_judge_argv(model, effort):
             "-s", "read-only", "--json", "--skip-git-repo-check", "-"]
 
 
-def _audit_stream(stream):
+def _audit_stream(stream, capsule_path=None):
     events = []
     for line in stream.splitlines():
         try: events.append(strict_json_loads(line))
@@ -303,21 +344,42 @@ def _audit_stream(stream):
     recognized = {"item.completed", "item.started", "turn.completed", "response.completed",
                   "session.created", "thread.started", "command", "tool_call"}
     from .golem_runner import audit_commands
-    hits = audit_commands(events)
+    hits = audit_commands(events, capsule_path=capsule_path, session_path=None)
     if hits: return "VIOLATED", len(events)
-    if not any(isinstance(event, dict) and event.get("type") in recognized for event in events): return "UNVERIFIABLE", len(events)
+    if not events or not any(isinstance(event, dict) and event.get("type") in recognized for event in events): return "UNVERIFIABLE", len(events)
     return "CLEAN", len(events)
 
 
-def _last_assistant_text(stream):
-    messages = []
+def _last_assistant_text(stream, *, allow_implicit_completion=False):
+    pending, completed = [], []
+    trailing_agent = False
+    saw_turn_completed = False
     for line in stream.splitlines():
         try: event = strict_json_loads(line)
-        except (json.JSONDecodeError, TypeError): continue
+        except (json.JSONDecodeError, TypeError, ValueError): continue
+        if not isinstance(event, dict):
+            continue
         item = event.get("item", {}) if isinstance(event, dict) else {}
         if event.get("type") == "item.completed" and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
-            messages.append(item["text"])
-    return messages[-1] if messages else stream
+            pending.append(item["text"])
+            trailing_agent = True
+        elif event.get("type") == "turn.completed":
+            saw_turn_completed = True
+            if pending:
+                completed.append(pending[-1])
+            pending = []
+            trailing_agent = False
+    if not completed:
+        # Frozen integration fixtures predating Codex's terminal event may inject
+        # one complete-looking message. Real codex dispatches never use this path.
+        if allow_implicit_completion and not saw_turn_completed and len(pending) == 1:
+            return pending[0]
+        if trailing_agent:
+            raise JudgeParseError("agent message appeared after the final completed turn", "STREAM_AMBIGUOUS")
+        raise JudgeParseError("no completed dispatch turn with an agent message", "STREAM_AMBIGUOUS")
+    if trailing_agent:
+        raise JudgeParseError("agent message appeared after the final completed turn", "STREAM_AMBIGUOUS")
+    return completed[-1]
 
 
 def _write_receipt(run_dir, receipt):
@@ -335,7 +397,7 @@ def run_judge(records, journal, run_dir, judge_cmd=None, model="gpt-6-sol", effo
               verifier_cmd=None, verifier_timeout=600, *, run_id=None,
               manifest_sha256=None, transcript_head_chain_hash=None, journal_sha256=None,
               verifier_model=None, verifier_effort=None):
-    """Run isolated judging and verification; only verified claims are counted."""
+    """Use temporary-cwd packaging isolation only; reads are audited, not enforced."""
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     bundle = build_judge_bundle(records, journal)
@@ -361,39 +423,53 @@ def run_judge(records, journal, run_dir, judge_cmd=None, model="gpt-6-sol", effo
                     stdout, stderr = process.communicate()
                     receipt["timeout"] = True
                 receipt["exit_code"] = process.returncode
+            receipt["audit_status"], receipt["audit_events_seen"] = _audit_stream(
+                stdout.decode("utf-8", errors="replace"), capsule_path=empty_cwd)
         receipt["stdout"] = stdout.decode("utf-8", errors="replace")
         receipt["stderr"] = stderr.decode("utf-8", errors="replace")
-        if receipt["timeout"]:
+        if receipt["audit_status"] == "VIOLATED":
+            receipt.update(parse_status="BLINDNESS_VIOLATED", outcome="BLINDNESS_VIOLATED")
+        elif receipt["timeout"]:
             receipt["parse_status"] = "TIMEOUT"
         elif process.returncode != 0:
             receipt["parse_status"] = "PROCESS_ERROR"
+        elif receipt["audit_status"] == "UNVERIFIABLE":
+            receipt.update(parse_status="AUDIT_UNVERIFIABLE", outcome="AUDIT_UNVERIFIABLE")
         else:
             try:
-                candidates = parse_judge_output(_last_assistant_text(receipt["stdout"]))
+                candidates = parse_judge_output(_last_assistant_text(receipt["stdout"],
+                                                allow_implicit_completion=judge_cmd is not None))
                 accepted, discards = gate(records, candidates)
                 verification = verify_supported(records, accepted, run_dir / "verification", verifier_cmd,
-                                                model, effort, verifier_timeout)
+                                                model, effort, verifier_timeout, bundle_sha256=bundle_hash)
                 receipt.update(raw_accepted=accepted, discards=discards, parse_status="OK",
                                outcome="COMPLETE", stage_results={"mechanical": {"accepted": accepted,
                                "discards": discards}, "verification": verification},
                                counted=counted_instances(verification))
+                verifier_statuses = [item.get("audit_status", "UNVERIFIABLE")
+                                     for item in verification["verified"] + verification["unsupported"]]
+                if "VIOLATED" in verifier_statuses:
+                    receipt.update(outcome="BLINDNESS_VIOLATED", counted=[])
+                elif any(status != "CLEAN" for status in verifier_statuses):
+                    receipt.update(outcome="AUDIT_UNVERIFIABLE", counted=[])
                 if any(item.get("reason") in {"INCOMPLETE", "TIMEOUT"} for item in verification["unsupported"]):
-                    receipt["outcome"] = "INCOMPLETE"
+                    if receipt["outcome"] == "COMPLETE": receipt["outcome"] = "INCOMPLETE"
             except JudgeParseError as exc:
-                receipt.update(parse_status="MALFORMED", parse_error=str(exc))
+                receipt.update(parse_status=exc.code, parse_error=str(exc), parse_error_code=exc.code)
     except (OSError, ValueError, TypeError) as exc:
         receipt.update(parse_status="RUN_ERROR", error=str(exc))
     bindings = (run_id, manifest_sha256, transcript_head_chain_hash, journal_sha256)
     if all(value is not None for value in bindings):
-        judge_audit, judge_events = _audit_stream(receipt.get("stdout", ""))
+        judge_audit, judge_events = receipt.get("audit_status", "UNVERIFIABLE"), receipt.get("audit_events_seen", 0)
         verification = receipt.get("stage_results", {}).get("verification", {"verified": [], "unsupported": []})
         verifier_statuses = [item.get("audit_status", "UNVERIFIABLE") for item in verification.get("verified", []) + verification.get("unsupported", [])]
         verifier_audit = ("VIOLATED" if "VIOLATED" in verifier_statuses else
                           "UNVERIFIABLE" if any(item != "CLEAN" for item in verifier_statuses) else "CLEAN")
         audit_status = "VIOLATED" if "VIOLATED" in {judge_audit, verifier_audit} else "UNVERIFIABLE" if "UNVERIFIABLE" in {judge_audit, verifier_audit} else "CLEAN"
         if audit_status == "VIOLATED": outcome = "BLINDNESS_VIOLATED"
-        elif receipt.get("outcome") != "COMPLETE": outcome = "INCOMPLETE_JUDGE"
+        elif receipt.get("parse_status") in {"TIMEOUT", "PROCESS_ERROR", "RUN_ERROR"}: outcome = "INCOMPLETE_JUDGE"
         elif audit_status == "UNVERIFIABLE": outcome = "AUDIT_UNVERIFIABLE"
+        elif receipt.get("outcome") != "COMPLETE": outcome = "INCOMPLETE_JUDGE"
         else: outcome = "COMPLETE"
         counted = []
         decisions = list(receipt.get("discards", []))

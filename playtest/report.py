@@ -64,13 +64,24 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
     if coverage_fraction < 0:
         raise ValueError("coverage_fraction must be nonnegative")
     base, cand = list(baseline_entries), list(candidate_entries)
-    right = {}
+    left_by_key, right = {}, {}
+    for row in base: left_by_key.setdefault(_key(row), []).append(row)
     for row in cand: right.setdefault(_key(row), []).append(row)
     pairs, ineligible = [], []
-    used = set()
+    duplicate_keys = {key for key, rows in left_by_key.items() if len(rows) > 1}
+    duplicate_keys.update(key for key, rows in right.items() if len(rows) > 1)
+    duplicate_ids = set()
+    for key in duplicate_keys:
+        for row in left_by_key.get(key, []) + right.get(key, []):
+            duplicate_ids.add(id(row))
+            ineligible.append({"run_id": row.get("run_id"), "reason": "DUPLICATE_PAIR_KEY", "pair_key": key})
+    used = set(duplicate_ids)
     for left in base:
+        if id(left) in duplicate_ids: continue
         if not left.get("eligibility", {}).get("comparison_eligible", left.get("run_outcome") == "COMPLETE"):
             ineligible.append({"run_id": left.get("run_id"), "reason": left.get("eligibility", {}).get("reason_code", "BASELINE_INELIGIBLE")}); continue
+        if left.get("turn_cap") is None:
+            ineligible.append({"run_id": left.get("run_id"), "reason": "TURN_CAP_UNKNOWN"}); continue
         key = _key(left)
         matches = right.get(key, [])
         match = next((x for x in matches if id(x) not in used), None)
@@ -79,6 +90,14 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
         used.add(id(match))
         if not match.get("eligibility", {}).get("comparison_eligible", match.get("run_outcome") == "COMPLETE"):
             ineligible.append({"run_id": match.get("run_id"), "reason": match.get("eligibility", {}).get("reason_code", "CANDIDATE_INELIGIBLE")}); continue
+        if match.get("turn_cap") is None:
+            ineligible.append({"run_id": match.get("run_id"), "reason": "TURN_CAP_UNKNOWN"}); continue
+        expected_change = left.get("expected_content_change") or match.get("expected_content_change")
+        if not isinstance(expected_change, str) or not expected_change.strip(): expected_change = None
+        if expected_change:
+            ineligible.append({"baseline_run_id": left.get("run_id"), "candidate_run_id": match.get("run_id"),
+                               "reason": "NOT_A_LIKE_FOR_LIKE", "expected_content_change": expected_change})
+            continue
         bc, cc = left.get("coverage", {}), match.get("coverage", {})
         losses = [field for field in ("rooms_visited", "objects_touched", "encounters_faced")
                   if cc.get(field, 0) < coverage_fraction * bc.get(field, 0)]
@@ -86,10 +105,19 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
             ineligible.append({"baseline_run_id": left.get("run_id"), "candidate_run_id": match.get("run_id"),
                                "reason": "COMPARISON_INELIGIBLE_CONTENT_LOSS", "coverage_fields": losses})
             continue
+        inventory_b, inventory_c = left.get("content_inventory"), match.get("content_inventory")
+        if inventory_b is not None and inventory_c is not None:
+            inventory_losses = [field for field in ("total_rooms", "total_objects", "total_takeables", "total_enemies", "total_exits")
+                                if inventory_c.get(field, 0) < inventory_b.get(field, 0)]
+            if inventory_losses:
+                ineligible.append({"baseline_run_id": left.get("run_id"), "candidate_run_id": match.get("run_id"),
+                                   "reason": "COMPARISON_INELIGIBLE_CONTENT_LOSS", "inventory_fields": inventory_losses})
+                continue
         pairs.append({"baseline": left, "candidate": match})
     for row in cand:
         if id(row) not in used and not any(x.get("run_id") == row.get("run_id") for x in ineligible):
             ineligible.append({"run_id": row.get("run_id"), "reason": "UNPAIRED_CANDIDATE"})
+    ineligible.sort(key=lambda row: (str(row.get("run_id", row.get("baseline_run_id", ""))), row["reason"]))
     modes = set()
     for pair in pairs:
         for side in ("baseline", "candidate"):

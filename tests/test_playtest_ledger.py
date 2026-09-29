@@ -7,7 +7,8 @@ import tempfile
 import unittest
 
 from playtest.detectors import DETECTOR_VERSION, curiosity_events, run_all, session_facts
-from playtest.ledger import append_entry, make_entry, verify_ledger
+from playtest.ledger import append_entry, head_hash, make_entry, verify_ledger
+from playtest.run_ledger_cli import build_entry
 from playtest.report import compare, poisson_ci, render_markdown
 from playtest.transcript import load_transcript
 
@@ -36,6 +37,29 @@ class LedgerTests(unittest.TestCase):
             with self.assertRaises(ValueError): append_entry(self.path, base("three"))
         self.path.write_bytes(original)
         self.assertEqual(len(verify_ledger(self.path)), 2)
+
+    def test_expected_head_is_an_external_anchor(self):
+        append_entry(self.path, base("one"))
+        expected = head_hash(self.path)
+        self.assertEqual(verify_ledger(self.path, expected_head=expected)[0]["run_id"], "one")
+        append_entry(self.path, base("two"))
+        with self.assertRaisesRegex(ValueError, "expected head"):
+            verify_ledger(self.path, expected_head=expected)
+
+    def test_rewriting_chain_and_local_anchor_is_outside_threat_model(self):
+        """Local hashes detect partial damage; a writer of data and anchor can forge both."""
+        append_entry(self.path, base("one"))
+        original_head = head_hash(self.path)
+        entry = base("forged")
+        # Rebuild a self-consistent replacement using the ordinary writer in a second file.
+        replacement = self.path.with_name("replacement.jsonl")
+        append_entry(replacement, entry)
+        self.path.write_bytes(replacement.read_bytes())
+        self.path.with_name(self.path.name + ".head").write_bytes(replacement.with_name(replacement.name + ".head").read_bytes())
+        self.assertNotEqual(head_hash(self.path), original_head)
+        self.assertEqual(verify_ledger(self.path)[0]["run_id"], "forged")
+        with self.assertRaisesRegex(ValueError, "expected head"):
+            verify_ledger(self.path, expected_head=original_head)
 
     def test_noncomplete_is_recorded_but_ineligible(self):
         entry = base(run_outcome="INCOMPLETE_DISPATCH")
@@ -94,23 +118,59 @@ class LedgerTests(unittest.TestCase):
         self.assertNotIn("score", rendered.lower())
         self.assertEqual(report["paired_count"], 4)
 
-    def test_cli_adds_verified_run(self):
+    def test_cli_recomputes_fabricated_receipt_and_marks_mismatches(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); run, session = root / "run", root / "session"
             run.mkdir(); session.mkdir()
-            (session / "manifest.json").write_text(json.dumps({"session_id":"s", "persona_id":"p", "seed":1,
-              "game_sha":"g", "harness_sha":"h", "narrator_policy":"plain"}))
-            # Reuse a real verified transcript to exercise the CLI's chain verification.
             source = REAL / "pilot1_explorer"
+            session_manifest = json.loads((source / "manifest.json").read_text())
+            (session / "manifest.json").write_text(json.dumps(session_manifest))
+            # Reuse a real verified transcript to exercise the CLI's chain verification.
             for name in ("transcript.jsonl", "transcript.jsonl.head"):
                 (session / name).write_bytes((source / name).read_bytes())
-            (run / "run_receipt.json").write_text(json.dumps({"outcome":"COMPLETE", "turns_taken":1, "game_sha":"g", "harness_sha":"h"}))
+            (run / "run_receipt.json").write_text(json.dumps({"outcome":"COMPLETE", "receipt_finalized_after_child_exit":True,
+              "turns_taken":1, "turn_cap":35, "game_sha":"WRONG_GAME_SHA", "harness_sha":"WRONG_HARNESS_SHA",
+              "transcript_head_chain_hash":"f"*64}))
+            entry = build_entry(run, session)
+            self.assertEqual(entry["turns"], 22)
+            self.assertNotEqual(entry["transcript_head_chain_hash"], "f"*64)
+            self.assertFalse(entry["eligibility"]["comparison_eligible"])
+            self.assertTrue(entry["eligibility"]["reason_code"].startswith("RECEIPT_MISMATCH:"))
             ledger = root / "ledger.jsonl"
             result = subprocess.run([sys.executable, "-m", "playtest.run_ledger_cli", "add", "--run-dir", str(run),
                 "--session-dir", str(session), "--ledger", str(ledger)], cwd=ROOT, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**os.environ, "PYTHONDONTWRITEBYTECODE":"1"})
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(len(verify_ledger(ledger)), 1)
+            stored = verify_ledger(ledger)[0]
+            self.assertFalse(stored["eligibility"]["comparison_eligible"])
+            self.assertEqual(stored["eligibility"]["reason_code"], "RECEIPT_MISMATCH:game_sha")
+            (run / "run_receipt.json").write_text(json.dumps({"outcome":"COMPLETE", "turn_cap":35,
+              "game_sha":session_manifest["game_sha"], "harness_sha":session_manifest["harness_sha"]}))
+            older = build_entry(run, session)
+            self.assertEqual(older["eligibility"]["reason_code"], "RECEIPT_NOT_FINALIZED")
+
+    def test_content_inventory_loss_and_expected_change(self):
+        b = base("b", content_inventory={"total_rooms": 8, "total_objects": 4, "total_takeables": 2, "total_enemies": 3, "total_exits": 9}, coverage={"rooms_visited": 2})
+        smaller = base("small", content_inventory={"total_rooms": 7, "total_objects": 4, "total_takeables": 2, "total_enemies": 3, "total_exits": 9}, coverage={"rooms_visited": 2})
+        report = compare([b], [smaller])
+        self.assertEqual(report["paired_count"], 0)
+        self.assertEqual(report["ineligible"][0]["reason"], "COMPARISON_INELIGIBLE_CONTENT_LOSS")
+        changed = base("changed", content_inventory=smaller["content_inventory"], expected_content_change="remove a room")
+        report = compare([b], [changed])
+        self.assertEqual(report["paired_count"], 0)
+        self.assertEqual(report["ineligible"][0]["reason"], "NOT_A_LIKE_FOR_LIKE")
+
+    def test_duplicate_pair_keys_are_order_independent(self):
+        b1, b2 = base("b1"), base("b2")
+        c1, c2 = base("c1"), base("c2")
+        c2["per_mode_verified_instances"] = {"detector": {"FAIL_WITH_NOTHING": 1}}
+        first = compare([b1, b2], [c1, c2])
+        second = compare([b2, b1], [c2, c1])
+        def normalized(report):
+            return sorted((row.get("run_id"), row["reason"]) for row in report["ineligible"])
+        self.assertEqual(first["paired_count"], 0)
+        self.assertEqual(normalized(first), normalized(second))
+        self.assertTrue(all(reason == "DUPLICATE_PAIR_KEY" for _, reason in normalized(first)))
 
 
 if __name__ == "__main__":

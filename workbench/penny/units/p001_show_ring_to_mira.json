@@ -1,0 +1,27 @@
+{
+  "unit_id": "dnd-p001-show-ring-to-mira",
+  "goal": "In the gallery only, let one free-text intent meaning 'I show the ring to Mira' be interpreted by the optional local narrator as the existing talk-to-Mira action. Accept only that fixed candidate, pass it through the existing deterministic game.talk('Mira') rules, and reject malformed, unrelated, or unsupported proposals. If the local narrator is unavailable or returns no valid proposal, leave ordinary deterministic commands playable and handle the free text as unrecognized. Do not add other intents or mechanics.",
+  "read_paths": [
+    "AGENTS.md",
+    "dnd_combat/__main__.py",
+    "dnd_combat/adventure.py",
+    "dnd_combat/narrator.py",
+    "dnd_combat/llm_adapter.py",
+    "dnd_combat/session_log.py",
+    "tests/test_terminal_smoke.py",
+    "tests/test_narrator.py",
+    "README.md"
+  ],
+  "write_paths": [
+    "dnd_combat/intent.py",
+    "dnd_combat/__main__.py",
+    "tests/test_intent.py",
+    "tests/test_terminal_smoke.py",
+    "tests/test_narrator.py"
+  ],
+  "proof_commands": [
+    "python3 -m unittest discover -v"
+  ],
+  "max_model_steps": 16,
+  "base_ref": "a7d2760045a46f6b992535a9141ed3a8f74596d9"
+}

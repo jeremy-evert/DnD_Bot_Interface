@@ -4,9 +4,10 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 from delve import PackError, load_pack, validate_pack
+from delve.pack import STRUCTURAL_KEYS, check_engine_ready, load_engine_ready_pack
 
 SPEC = Path(__file__).parents[1] / 'docs' / 'DELVE_M1_SPEC.md'
 TEXT = SPEC.read_text(encoding='utf-8')
@@ -117,6 +118,70 @@ class PackTests(unittest.TestCase):
             self.assertEqual(load_pack(p),load_pack(EXAMPLE))
         with self.assertRaises(PackError) as cm: load_pack('{')
         self.assertEqual(cm.exception.code,'E_SCHEMA'); self.assertEqual(cm.exception.path,'$')
+
+    def _engine_ready_dict(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['items'].append({'id':'test_item','name':'test item','reader':{'on':'throw','event_key':'item.throwread','effects':[]}})
+        d['rooms'][0]['objects'][0]['item_id']='test_item'
+        keys=set(STRUCTURAL_KEYS)
+        keys.add('item.throwread')
+        keys.update(('get.blocked','get.not_takeable','use.nothing'))
+        for key in keys:
+            if key not in {e['key'] for e in d['bank']['entries']}:
+                d['bank']['entries'].append({'key':key,'fact_slots':[],'variants':[],'fallback':'Fallback.'})
+        return d
+
+    def test_complete_synthetic_pack_is_engine_ready(self):
+        d=self._engine_ready_dict()
+        self.assertEqual(load_engine_ready_pack(d),load_pack(d))
+        self.assertIsNone(check_engine_ready(load_pack(d)))
+
+    def test_each_applicable_structural_key_is_required(self):
+        d=self._engine_ready_dict()
+        ready=load_pack(d)
+        applicable=[]
+        for key, condition in STRUCTURAL_KEYS.items():
+            active={
+                'always':True, 'enemies':bool(d['enemies']),
+                'takeable_objects':any(o.get('item_id') for r in d['rooms'] for o in r['objects']),
+                'items':bool(d['items']), 'hazards':bool(d['hazards']),
+                'facts':bool(d['truth']['facts']), 'clocks':bool(d['clocks']),
+                'thresholds':any(c['thresholds'] for c in d['clocks']),
+            }[condition]
+            if active: applicable.append(key)
+        for key in applicable:
+            with self.subTest(key=key):
+                removed={key}
+                if key=='clock.threshold': removed.add('clock.threshold.patrol.2')
+                broken=replace(ready,bank=tuple(e for e in ready.bank if e.key not in removed))
+                with self.assertRaises(PackError) as cm:
+                    check_engine_ready(broken)
+                self.assertEqual(cm.exception.code,'E_BANK_STRUCTURAL_MISSING')
+                named=key
+                if key=='clock.threshold': named='clock.threshold.patrol.2'
+                self.assertIn(named,cm.exception.message)
+        broken=replace(ready,bank=tuple(e for e in ready.bank if e.key!='item.throwread'))
+        with self.assertRaises(PackError) as cm:
+            check_engine_ready(broken)
+        self.assertEqual(cm.exception.code,'E_BANK_STRUCTURAL_MISSING')
+        self.assertIn('item.throwread',cm.exception.message)
+
+    def test_clock_threshold_specific_or_generic_key(self):
+        d=self._engine_ready_dict()
+        d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='clock.threshold']
+        d['bank']['entries'].append({'key':'clock.threshold.patrol.2','fact_slots':['at','clock_label'],'variants':['At {{at}}: {{clock_label}}.'],'fallback':'At {{at}}: {{clock_label}}.'})
+        pack=load_pack(d)
+        pack=replace(pack,bank=tuple(e for e in pack.bank if e.key!='clock.threshold'))
+        check_engine_ready(pack)
+
+    def test_engine_event_literals_stay_covered(self):
+        source=(Path(__file__).parents[1]/'delve'/'engine.py').read_text(encoding='utf-8')
+        emitted=set(re.findall(r"_event\(\s*['\"]([^'\"]+)['\"]",source))
+        self.assertTrue(emitted)
+        emitted.discard('terminal.')  # Dynamic terminal suffix is checked explicitly below.
+        self.assertEqual(emitted-set(STRUCTURAL_KEYS),set())
+        for suffix in ('victory','death','closed'):
+            self.assertIn('terminal.'+suffix,STRUCTURAL_KEYS)
 
 # Exercise semantic validation independently of the strict public loader.
 def load_unvalidated(d):

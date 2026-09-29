@@ -3,6 +3,76 @@ import json, re
 from pathlib import Path
 from . import model as m
 
+# Engine-owned event keys and the pack contents that make each path reachable.
+# Keys supplied by pack content (room descriptions, readers, telegraphs, etc.)
+# remain checked by validate_pack; this table covers engine fallbacks/events.
+STRUCTURAL_KEYS = {
+    'room.enter': 'always', 'room.return': 'always',
+    'move.blocked': 'always', 'move.no_exit': 'always',
+    'target.unknown': 'always', 'object.read': 'always', 'inventory': 'always',
+    'help': 'always', 'terminal.quit': 'always', 'combat.not_yet': 'always',
+    'attack.hit': 'enemies', 'attack.miss': 'enemies',
+    'brace.success': 'enemies', 'brace.wasted': 'enemies',
+    'shove.success': 'enemies', 'shove.fail': 'enemies',
+    'throw.fizzle': 'enemies', 'throw.interrupt': 'enemies',
+    'intent.cancelled': 'enemies', 'enemy.hit': 'enemies', 'enemy.miss': 'enemies',
+    'retreat.blocked': 'enemies',
+    'get.blocked': 'takeable_objects', 'get.not_takeable': 'takeable_objects',
+    'item.get': 'takeable_objects', 'use.nothing': 'items',
+    'hazard.trigger': 'hazards', 'fact.payoff': 'facts',
+    'clock.tick': 'clocks', 'clock.threshold': 'thresholds',
+    'clue.reveal': 'facts',
+    'terminal.victory': 'always', 'terminal.death': 'always',
+    'terminal.retry': 'always', 'terminal.closed': 'always',
+}
+
+
+def check_engine_ready(pack) -> None:
+    """Require nonempty bank fallbacks for engine event paths in this pack."""
+    bank = {entry.key: entry for entry in pack.bank}
+    has_takeable = any(obj.item_id is not None for room in pack.rooms for obj in room.objects)
+    conditions = {
+        'always': True,
+        'enemies': bool(pack.enemies),
+        'takeable_objects': has_takeable,
+        'items': bool(pack.items),
+        'hazards': bool(pack.hazards),
+        'facts': bool(pack.facts),
+        'clocks': bool(pack.clocks),
+        'thresholds': any(clock.thresholds for clock in pack.clocks),
+    }
+    missing = []
+    for key, condition in STRUCTURAL_KEYS.items():
+        if not conditions[condition]:
+            continue
+        if key == 'clock.threshold':
+            # The engine emits a specific key when present, otherwise this fallback.
+            for clock in pack.clocks:
+                for threshold in clock.thresholds:
+                    specific = f'clock.threshold.{clock.id}.{threshold.at}'
+                    if specific not in bank and ('clock.threshold' not in bank or not bank['clock.threshold'].fallback.strip()):
+                        missing.append(specific + ' (or clock.threshold)')
+            continue
+        entry = bank.get(key)
+        if entry is None or not entry.fallback.strip():
+            missing.append(key)
+    # Throw readers are reached by the engine's combat throw path; their
+    # content-supplied keys have the same fallback requirement as literals.
+    for item in pack.items:
+        if item.reader.on == 'throw':
+            entry = bank.get(item.reader.event_key)
+            if entry is None or not entry.fallback.strip():
+                missing.append(item.reader.event_key)
+    if missing:
+        _err('E_BANK_STRUCTURAL_MISSING', '$.bank.entries', 'missing nonempty fallback for: ' + ', '.join(missing))
+
+
+def load_engine_ready_pack(path_or_text_or_dict):
+    """Load and validate a pack, then check engine-wide fallback readiness."""
+    pack = load_pack(path_or_text_or_dict)
+    check_engine_ready(pack)
+    return pack
+
 class PackError(ValueError):
     def __init__(self, code, path, message):
         self.code, self.path, self.message = code, path, message

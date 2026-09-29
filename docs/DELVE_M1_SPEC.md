@@ -352,3 +352,28 @@ The M1.2 schema had no link between a room `Object` and an inventory `Item`, so 
 - `look <object_id>` fires the object's `reader` when `on` is `look` and its conditions hold (present in current room); readers with `when_flag_id` unmet emit the same object's `object.read` fallback event (never silence).
 - Enemies drop nothing in M1. The engine sets the reserved flag `__player_hp_zero` when player HP reaches 0 (the only reserved flag).
 - Validator additions: `item_id` must reference an existing item (E_ITEM_UNKNOWN); an item may be referenced by at most one object (E_ITEM_DUPLICATE_SOURCE); new bank keys required for `get.blocked`, `get.not_takeable`, `use.nothing` (E_BANK_FALLBACK_MISSING if absent) -- content units add them.
+
+## 7. Amendment 2 (Ivy, 2026-09-29): engine event catalog and clock-threshold rule
+
+Every `Event` the engine emits has `type`, `key` (a bank key), `fact_slots`, `numbers`, `effects` (as spec section 3). The ENGINE-STRUCTURAL keys (the bank of any shipped pack must contain each with a nonempty fallback; a later unit adds the validator check E_BANK_STRUCTURAL_MISSING):
+
+| Key | Emitted when | fact_slots |
+|---|---|---|
+| room.enter | first entry to a room | room_name |
+| room.return | re-entry to a visited room | room_name |
+| (room.description_key) | after room.enter/return and on `look` with no target | room_name |
+| move.blocked | move attempted while a living enemy is in the room (use retreat) | enemy_name |
+| move.no_exit | no exit that way (or gate denied: then the gate's denial_event_key) | direction |
+| target.unknown | look/get/use/throw named an id not present/held | target |
+| object.read | `look <object>` whose reader conditions are unmet, or objects read with no reader text | object_name |
+| get.blocked / get.not_takeable / item.get / use.nothing | per Amendment 1 | as Amendment 1 |
+| clue.reveal | generic line if a clue's own event_key is absent (normally the clue's event_key is emitted) | clue_id |
+| fact.payoff | when all clue_ids of a payoff fact are known: emit once, then run payoff_effects | fact_label |
+| clock.tick | a clock advanced | clock_label, value, max |
+| clock.threshold.<clock_id>.<at> | a threshold crossed, if that key exists in the bank; else `clock.threshold` (slots clock_label, at) | clock_label, at |
+| enemy.intent | reserved for generic intent declaration fallback; normally the intent's telegraph_key is emitted | enemy_name |
+| attack.hit / attack.miss / shove.success / shove.fail / brace.success / brace.wasted / throw.interrupt / hazard.trigger | combat (M1.5+) | per combat unit |
+| help | `?`/help | none |
+| terminal.victory / terminal.death / terminal.retry | terminals | cause (death) |
+
+Order within one `apply()`: (1) validate action, (2) player action resolution events, (3) effect events (in effect order), (4) clock tick(s) and threshold events (ascending), (5) fact payoff check, (6) enemy intent declaration/resolution (M1.5), (7) terminal check. `apply()` returns the whole ordered list and appends it to `state.event_log`. A blocked or invalid action changes no state, draws no RNG, ticks no clock, and still emits exactly one explanatory event. The `move` tick source ticks once per SUCCESSFUL move; `retreat` ticks its own source.

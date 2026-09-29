@@ -26,6 +26,12 @@ def mutation(code):
     elif code=='E_INTENT_TELEGRAPH_MISSING': d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='intent.captain.smash']
     elif code=='E_HAZARD_TAG_UNKNOWN': d['hazards'][0]['tag']='acid'
     elif code=='E_OBJECT_READER_MISSING': d['rooms'][0]['objects'][0].pop('reader')
+    elif code=='E_ITEM_UNKNOWN': d['rooms'][0]['objects'][0]['item_id']='missing_item'
+    elif code=='E_ITEM_DUPLICATE_SOURCE':
+        d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]}})
+        d['rooms'][0]['objects'][0]['item_id']='test_item'
+        d['rooms'][0]['objects'][1]['item_id']='test_item'
+    elif code=='E_BANK_FALLBACK_MISSING_TAKEABLE': d['rooms'][0]['objects'][0]['item_id']='test_item'; d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]}}); d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='get.blocked']
     return d
 
 class PackTests(unittest.TestCase):
@@ -52,6 +58,20 @@ class PackTests(unittest.TestCase):
     def test_E_INTENT_TELEGRAPH_MISSING(self): self._reject('E_INTENT_TELEGRAPH_MISSING')
     def test_E_HAZARD_TAG_UNKNOWN(self): self._reject('E_HAZARD_TAG_UNKNOWN')
     def test_E_OBJECT_READER_MISSING(self): self._reject('E_OBJECT_READER_MISSING')
+
+    def test_E_ITEM_UNKNOWN(self): self._reject('E_ITEM_UNKNOWN')
+    def test_E_ITEM_DUPLICATE_SOURCE(self): self._reject('E_ITEM_DUPLICATE_SOURCE')
+    def test_takeable_object_requires_interaction_fallbacks(self):
+        with self.assertRaises(PackError) as cm: load_pack(mutation('E_BANK_FALLBACK_MISSING_TAKEABLE'))
+        self.assertEqual(cm.exception.code,'E_BANK_FALLBACK_MISSING')
+
+    def test_takeable_object_loads_with_item_and_fallbacks(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['items'].append({'id':'test_item','name':'test item','reader':{'on':'use','event_key':'object.read','effects':[]}})
+        d['rooms'][0]['objects'][0]['item_id']='test_item'
+        for key in ('get.blocked','get.not_takeable','use.nothing'):
+            d['bank']['entries'].append({'key':key,'fact_slots':[],'variants':[],'fallback':'Nothing happens.'})
+        self.assertEqual(load_pack(d).rooms[0].objects[0].item_id,'test_item')
 
     def test_unknown_fields_wrong_types_and_formats(self):
         d=copy.deepcopy(EXAMPLE); d['rogue']=1

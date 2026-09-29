@@ -180,6 +180,10 @@ class JudgeTests(unittest.TestCase):
         with self.assertRaises(JudgeParseError) as caught:
             parse_judge_output('[{"mode":"BAD","mode":"FALSE_AFFORDANCE","turn_ids":[0],"quote":"a sufficiently long quote","rationale":"x"}]')
         self.assertEqual(caught.exception.code, "DUPLICATE_JSON_KEY")
+        fenced = '```json\n[{"mode":"BAD","mode":"FALSE_AFFORDANCE","turn_ids":[0],"quote":"a sufficiently long quote","rationale":"x"}]\n```'
+        with self.assertRaises(JudgeParseError) as fenced_caught:
+            parse_judge_output(fenced)
+        self.assertEqual(fenced_caught.exception.code, "DUPLICATE_JSON_KEY")
         from playtest.judge import _parse_verifier
         with self.assertRaises(ValueError):
             _parse_verifier('{"supports":false,"supports":true,"reason":"x","quote":""}')

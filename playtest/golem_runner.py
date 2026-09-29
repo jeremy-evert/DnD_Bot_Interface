@@ -10,6 +10,7 @@ import secrets
 import signal
 import stat
 import shutil
+import shlex
 import subprocess
 import time
 
@@ -53,7 +54,7 @@ def validate_journal(entry):
 
 
 def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_combat"):
-    """Return forbidden event hits, allowing only exact capsule/playctl/reply references."""
+    """Return forbidden event hits, exempting only exact shipped playctl commands."""
     forbidden = ("dnd_combat", "DnD_Bot_Interface", "playtest/", "transcript.jsonl",
                  "manifest.json", "frames.jsonl", ".git", "/mnt/nora")
     if game_id == "delve": forbidden += ("delve/",)
@@ -67,71 +68,96 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
         elif isinstance(value, dict):
             for key, item in value.items():
                 yield from strings(key)
-                yield from strings(item)
+                if key != "command":
+                    yield from strings(item)
         elif isinstance(value, (list, tuple)):
             for item in value:
                 yield from strings(item)
-    def command_uses_shipped_playctl(event):
-        if not capsule:
-            return False
-        launcher = str(Path(capsule) / "playctl")
-        if not Path(launcher).is_file():
-            return False
+
+    def command_values(event):
         commands = []
         def collect(value):
             if isinstance(value, dict):
                 for key, item in value.items():
                     if key == "command" and isinstance(item, str):
                         commands.append(item)
-                    collect(item)
+                    elif key != "command":
+                        collect(item)
             elif isinstance(value, (list, tuple)):
                 for item in value:
                     collect(item)
         collect(event)
-        for command in commands:
-            try:
-                tokens = __import__("shlex").split(command)
-            except ValueError:
-                continue
-            if tokens and tokens[0] in {"./playctl", launcher}:
+        return commands
+
+    def split_command(command):
+        # These forms can execute or read content outside the visible simple-command
+        # tokens. Do not grant any exemption when they appear, even inside quotes.
+        if any(marker in command for marker in ("$(", "`", "<<<", "<<")):
+            return None
+        try:
+            lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n<>")
+            lexer.whitespace = " \t\r"
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            tokens = list(lexer)
+        except ValueError:
+            return None
+        segments, current = [], []
+        for token in tokens:
+            if token in {";", "&&", "||", "|", "&", "\n"}:
+                if current:
+                    segments.append(current)
+                    current = []
+            elif any(char in token for char in "<>;|"):
+                # Unusual/redirection operator spellings are not parsed as an
+                # auditable simple command, so conservatively disable exemptions.
+                return None
+            else:
+                current.append(token)
+        if current:
+            segments.append(current)
+        return segments
+
+    def is_exact_launcher(tokens):
+        if not capsule or len(tokens) != 3:
+            return False
+        launcher = str(Path(capsule) / "playctl")
+        if not Path(launcher).is_file() or tokens[0] not in {"./playctl", launcher}:
+            return False
+        try:
+            payload = json.loads(tokens[2])
+            if tokens[1] == "step":
+                return isinstance(payload, list) and bool(payload) and all(isinstance(item, str) for item in payload)
+            if tokens[1] == "journal":
+                validate_journal(payload)
                 return True
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
         return False
 
-    def spans_for(text, location):
-        if not location:
-            return []
-        result, offset = [], 0
-        while True:
-            index = text.find(location, offset)
-            if index < 0:
-                return result
-            end = index + len(location)
-            if end == len(text) or text[end] in "/\\\\ \t\r\n\"'?:":
-                result.append((index, end))
-            offset = index + 1
+    def command_fragments(command):
+        segments = split_command(command)
+        if segments is None:
+            return [(command, False)]
+        return [(" ".join(tokens), is_exact_launcher(tokens)) for tokens in segments]
 
     for event in events:
         raw = event if isinstance(event, str) else json.dumps(event, sort_keys=True)
-        candidates = list(strings(event)) or [raw]
-        shipped_playctl = command_uses_shipped_playctl(event)
+        candidates = list(strings(event))
+        commands = command_values(event)
+        if not candidates and not commands:
+            candidates = [raw]
+        audited = [(candidate, False) for candidate in candidates]
+        for command in commands:
+            audited.extend(command_fragments(command))
         for fragment in (*forbidden, *((session,) if session else ()), *((replies,) if replies else ())):
             found = False
-            for candidate in candidates:
-                offset = 0
-                while fragment:
-                    index = candidate.find(fragment, offset)
-                    if index < 0:
-                        break
-                    end = index + len(fragment)
-                    in_capsule = any(start <= index and end <= stop for start, stop in spans_for(candidate, capsule))
-                    in_replies = shipped_playctl and any(start <= index and end <= stop for start, stop in spans_for(candidate, replies))
-                    # A session-path match is always evidence, even where its spelling
-                    # begins with a path that happens to be the capsule prefix.
-                    session_match = bool(session and fragment == session)
-                    if not session_match and not in_capsule and not in_replies:
-                        found = True
-                        break
-                    offset = index + 1
+            for candidate, exempt in audited:
+                if exempt:
+                    continue
+                if fragment in candidate:
+                    found = True
+                    break
                 if found:
                     break
             if found:
@@ -355,6 +381,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     processed, events = set(), []
     final_ack_seen = False
     controller_killed = False
+    terminal_journal_offset = None
     try:
         while True:
             if time.monotonic() - started > timeout:
@@ -393,6 +420,10 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                     elif turns >= turn_cap: stop_reason = "cap"
                     _controller_reply(replies / inbox.name, {"output": output, "turn": turns,
                         "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
+                    if stop_reason in {"won", "dead", "cap", "no_progress", "player_stop"}:
+                        # The terminal reply is now visible to the golem. Only journal
+                        # bytes appended beyond this point can acknowledge its result.
+                        terminal_journal_offset = journal_path.stat().st_size
                     if stop_reason: controller_stop = True; break
                 except Exception as exc:
                     protocol_error = True; stop_reason = "ipc_error"
@@ -435,14 +466,21 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     stdout_data, stderr_data = (run_dir / "stdout.log").read_bytes(), (run_dir / "stderr.log").read_bytes()
     journal_bytes = journal_path.read_bytes()
     try:
-        journal_rows = [strict_json_loads(line) for line in journal_bytes.decode("utf-8").splitlines() if line]
+        journal_rows, journal_row_offsets = [], []
+        byte_offset = 0
+        for line in journal_bytes.splitlines(keepends=True):
+            if line.strip():
+                journal_rows.append(strict_json_loads(line.decode("utf-8").strip()))
+                journal_row_offsets.append(byte_offset)
+            byte_offset += len(line)
         for item in journal_rows: validate_journal(item)
         journal_consistent = len(journal_rows) == turns and [item["turn_id"] for item in journal_rows] == list(range(1, turns + 1))
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        journal_rows, journal_consistent = [], False
+        journal_rows, journal_row_offsets, journal_consistent = [], [], False
     # Existing receipt fields encode the final acknowledgement: a complete,
     # ordered journal has one row per action, including the controller's last reply.
-    final_ack_seen = journal_consistent
+    final_ack_seen = (journal_consistent and terminal_journal_offset is not None and turns > 0 and
+                      journal_row_offsets[-1] >= terminal_journal_offset and journal_rows[-1]["turn_id"] == turns)
     end = _game_manifest(game_id) if game_id == "delve" else _game_manifest()
     audit_status = "VIOLATED" if hits else "CLEAN" if recognized else "UNVERIFIABLE"
     if start["game"] != end["game"] or start["harness"] != end["harness"]: outcome = "GAME_MODIFIED_DURING_RUN"

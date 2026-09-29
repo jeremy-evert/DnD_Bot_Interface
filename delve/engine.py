@@ -123,8 +123,29 @@ class Engine:
                         self._advance_and_declare(foe_at_start, events)
             elif verb == 'retreat':
                 if not self._retreat(action.direction, foe_at_start, intent_at_start, events): valid=False
+            elif verb == 'shove':
+                if not foe_at_start or not intent_at_start:
+                    events.append(self._event('combat.not_yet')); valid=False
+                else:
+                    result = self._shove(foe_at_start, intent_at_start, events)
+                    if result == 'resolve' and self._living_enemy() is foe_at_start:
+                        self._finish_round(foe_at_start, intent_at_start, events)
+                    elif result == 'cancel' and self._living_enemy() is foe_at_start:
+                        self._advance_and_declare(foe_at_start, events)
+            elif verb == 'throw':
+                if action.target_id not in s.inventory:
+                    events.append(self._event('target.unknown', {'target': action.target_id or ''})); valid=False
+                elif not foe_at_start or not intent_at_start:
+                    events.append(self._event('combat.not_yet')); valid=False
+                else:
+                    if not self._throw(action.target_id, foe_at_start, intent_at_start, events): valid=False
+                    elif self._living_enemy() is foe_at_start:
+                        # A matched tag interrupts. A fizzle consumes the item and resolves the intent.
+                        if events[-1].key == 'throw.fizzle':
+                            self._finish_round(foe_at_start, intent_at_start, events)
+                        else:
+                            self._advance_and_declare(foe_at_start, events)
             else:
-                # M1.6 owns shove and throw.
                 events.append(self._event('combat.not_yet')); valid=False
         else:
             events.append(self._event('target.unknown', {'target': action.target_id or verb}))
@@ -178,6 +199,75 @@ class Engine:
             events.append(self._event('brace.success')); return 'cancel'
         events.append(self._event('brace.wasted')); return None
 
+    def _shove(self, enemy, intent, events):
+        st = self.state.enemies[enemy.id]
+        if intent.type in ('strike', 'rush', 'grab'):
+            st['zone'] = 'far'
+            events.append(self._event('shove.success'))
+            return 'cancel'
+        if intent.type == 'guard':
+            events.append(self._event('shove.fail'))
+            self._failed_shove_hazard(events)
+            return 'persist'
+        hazard = next((h for h in self.pack.hazards
+                       if h.room_id == self.state.room_id
+                       and h.trigger.get('action') == 'shove'
+                       and (not h.trigger.get('requires_flag_id') or h.trigger['requires_flag_id'] in self.state.flags)), None)
+        if hazard is None:
+            events.append(self._event('shove.fail'))
+            self._failed_shove_hazard(events)
+            return 'resolve'
+        st['zone'] = 'hazard'
+        events.append(self._event('hazard.trigger'))
+        # Hazard damage is dealt to the enemy as a result of the player's shove. It is not
+        # enemy-damage-on-player, so it is exempt from the telegraph-before-damage invariant.
+        self._hazard_effects(hazard, enemy, events)
+        events.append(self._event('shove.success'))
+        if st['hp'] <= 0:
+            st['alive'] = False
+            st['current_intent_id'] = None
+        return 'cancel'
+
+    def _throw(self, item_id, enemy, intent, events):
+        item = self.items[item_id]
+        self.state.inventory.remove(item_id)
+        matching = ('interrupt_any' in item.throw_tags or f'interrupt_{intent.type}' in item.throw_tags)
+        if not matching:
+            events.append(self._event('throw.fizzle'))
+            return True
+        reader = item.reader
+        if reader.on == 'throw' and self._reader_ready(reader):
+            events.append(self._event(reader.event_key, {'item_name': item.name}))
+            self._effects(reader.effects, events)
+        events.append(self._event('throw.interrupt'))
+        events.append(self._event('intent.cancelled'))
+        # Reader effects may contain interrupt_intent; enforce interruption from the tag too.
+        self.state.enemies[enemy.id]['current_intent_id'] = None
+        return True
+
+    def _hazard_effects(self, hazard, enemy, events, player=False):
+        tag = hazard.tag
+        st = self.state.enemies[enemy.id] if enemy else None
+        if tag == 'drop' and st:
+            st['zone'] = 'hazard'
+        elif tag == 'noise':
+            pass  # Declared tick_clock effects below carry the noise consequence.
+        elif tag == 'unstable_ground' and player:
+            self.state.player['zone'] = 'hazard'
+        # cover's mechanical effect is applied in _resolve_intent when the player braces.
+        self._effects(hazard.effects, events)
+        if st:
+            st['alive'] = st['hp'] > 0
+
+    def _failed_shove_hazard(self, events):
+        hazard = next((h for h in self.pack.hazards if h.room_id == self.state.room_id
+                       and h.tag == 'unstable_ground'
+                       and h.trigger.get('action') == 'shove'), None)
+        if hazard:
+            self.state.player['zone'] = 'hazard'
+            events.append(self._event('hazard.trigger'))
+            self._hazard_effects(hazard, None, events, player=True)
+
     def _resolve_intent(self, enemy, counter=None, events=None):
         if events is None: events=[]
         s=self.state; st=s.enemies[enemy.id]; intent=self._current_intent(enemy)
@@ -194,6 +284,9 @@ class Engine:
             damage=max(1,die+enemy.stats.damage_bonus)+sum(damages)
             if counter=='halve': damage//=2
             if counter in ('negate','resist'): damage=0
+            # Cover grants a bracing player one additional point of damage reduction.
+            if counter and any(h.room_id == s.room_id and h.tag == 'cover' for h in self.pack.hazards):
+                damage=max(0, damage-1)
             if damage:
                 s.player['hp']=max(0,s.player['hp']-damage)
                 if s.player['hp']==0:
@@ -258,8 +351,10 @@ class Engine:
                 if e.target == 'player':
                     s.player['hp'] = max(0, s.player['hp'] - e.amount)
                     if s.player['hp'] == 0: s.flags.add('__player_hp_zero')
-                elif e.target in s.enemies:
-                    ent=s.enemies[e.target]; ent['hp']=max(0,ent['hp']-e.amount); ent['alive']=ent['hp']>0
+                elif e.target == 'enemy':
+                    foe=self._living_enemy()
+                    if foe:
+                        ent=s.enemies[foe.id]; ent['hp']=max(0,ent['hp']-e.amount); ent['alive']=ent['hp']>0
             elif e.type == 'heal': s.player['hp'] = min(s.player['max_hp'], s.player['hp'] + e.amount)
             elif e.type == 'tick_clock': self._tick(e.clock_id, e.amount, events)
             elif e.type == 'move_zone':

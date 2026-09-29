@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 
-from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY_VERSION, canonical_json, catalog_digest,
+from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY_VERSION, LedgerCompatibleDict, canonical_json, catalog_digest,
                      GAME_ENTRYPOINTS, GAME_TREE_SPECS, normalize_instance, strict_json_loads, validate_ledger_entry)
 from .transcript import ZERO_HASH
 
@@ -63,6 +63,9 @@ def verify_ledger(path, expected_head=None):
             if entry.get("prev_hash") != previous or entry.get("entry_hash") != _entry_hash(entry):
                 raise ValueError(f"ledger chain mismatch at line {number}")
             previous = entry["entry_hash"]
+            missing_note_fields = {"detector_notes", "detector_inconclusive_modes"} - entry.keys()
+            if entry.get("schema_version") == 2 and missing_note_fields:
+                entry = LedgerCompatibleDict(entry, missing_note_fields)
             entries.append(entry)
     anchor_path = path.with_name(path.name + ".head")
     try:
@@ -88,8 +91,8 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
                judge_status=None, termination=None, run_outcome="COMPLETE", turns=0,
                transcript_record_count=None, verified_instances=(), curiosity=None,
                coverage=None, discarded_judge_claims=None, eligibility_flags=None,
-               expected_content_change=None, game_id="dnd_combat", schema_minor=1,
-               detector_set_status="IMPLEMENTED"):
+               expected_content_change=None, game_id="dnd_combat", schema_minor=2,
+               detector_set_status="IMPLEMENTED", detector_notes=()):
     """Build from already validated and normalized artifact facts only."""
     if run_outcome not in RUN_OUTCOMES: raise ValueError("invalid run_outcome")
     if type(is_holdout) is not bool: raise ValueError("is_holdout must be bool")
@@ -110,6 +113,9 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
     for item in normalized:
         from .schema import validate_verified_instance
         validate_verified_instance(item)
+    notes = [dict(note) for note in detector_notes]
+    inconclusive_modes = sorted({note.get("mode") for note in notes
+                                 if note.get("kind") == "INCONCLUSIVE"})
     if judge_status is None:
         judge_status = "NOT_REQUESTED" if measurement_policy == "detector_only" else "INCOMPLETE"
     if judge_status not in {"NOT_REQUESTED", "COMPLETE", "INCOMPLETE", "INVALID"}:
@@ -161,6 +167,7 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
         "coverage": {"rooms_visited": int(cov.get("rooms_visited", 0)),
                      "objects_touched": int(cov.get("objects_touched", 0)), "encounters_faced": int(cov.get("encounters_faced", 0))},
         "curiosity": dict(curiosity or {}), "expected_content_change": expected_content_change,
+        "detector_notes": notes, "detector_inconclusive_modes": inconclusive_modes,
         "eligibility": facts}
     validate_ledger_entry(entry)
     return entry

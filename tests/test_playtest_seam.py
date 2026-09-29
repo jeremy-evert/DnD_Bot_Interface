@@ -9,9 +9,10 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 from playtest.judge import run_judge
-from playtest.ledger import verify_ledger
+from playtest.ledger import append_entry, verify_ledger
 from playtest.report import compare, compare_cross_game, render_markdown
 from playtest.run_ledger_cli import build_entry
 from playtest.schema import (canonical_json, load_manifest, load_run_receipt, strict_json_loads,
@@ -240,6 +241,45 @@ class PlaytestSeamTests(unittest.TestCase):
         self.assertEqual(zero_entry["judge_counted_instances"], 0)
         self.assertEqual(incomplete_entry["judge_status"], "INCOMPLETE")
         self.assertIsNone(incomplete_entry["judge_counted_instances"])
+
+    def test_inconclusive_death_note_flows_through_cli_ledger_and_report(self):
+        session, run = self.root / "unknown-death-session", self.root / "unknown-death-run"
+        golem = self.root / "unknown-death-golem.py"
+        golem.write_text(textwrap.dedent('''\
+            import json, shlex, subprocess
+            print(json.dumps({"type":"command", "command":"./playctl step"}), flush=True)
+            for number in range(1, 4):
+                subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+                note = {"turn_id":number,"wanted":"attack","surprise":"","continue":1,
+                        "reason":"The outcome may matter.","unsupported_intent":None}
+                subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+        '''), encoding="utf-8")
+        receipt = run_golem(session, run, persona="explorer", persona_prompt_text="public explorer persona",
+            is_holdout=False, seed=2, name="Ada", character="wizard", turn_cap=3,
+            measurement_policy="detector_only", golem_cmd=[sys.executable, str(golem)])
+        self.assertEqual(receipt["termination"], "dead")
+        from playtest import detectors
+        # Treat the real terminal prose as unclassified to reproduce the disputed Sandy case.
+        with patch.object(detectors, "DEATH_EMPTY_TERMS", ()):
+            entry = build_entry(run, session)
+        self.assertEqual(entry["detector_inconclusive_modes"], ["FAIL_WITH_NOTHING"])
+        self.assertEqual(entry["detector_notes"][0]["kind"], "INCONCLUSIVE")
+        self.assertIn("You have fallen. The adventure ends here.", entry["detector_notes"][0]["quote"])
+
+        ledger_path = self.root / "unknown-death-ledger.jsonl"
+        append_entry(ledger_path, entry)
+        stored = verify_ledger(ledger_path)[-1]
+        self.assertEqual(stored["detector_notes"], entry["detector_notes"])
+        candidate = dict(stored, run_id="candidate")
+        candidate["detector_notes"] = []
+        candidate["detector_inconclusive_modes"] = []
+        report = compare([stored], [candidate])
+        mode = report["per_mode"]["detector:FAIL_WITH_NOTHING"]
+        self.assertIsNone(mode["paired_delta_count"])
+        markdown = render_markdown(report)
+        self.assertIn("FAIL_WITH_NOTHING INCONCLUSIVE(1)", markdown)
+        self.assertIn("not established (inconclusive evidence)", markdown)
+        self.assertNotIn("zero verified instances", markdown)
 
     def test_delve_game_identity_tree_and_descriptive_cross_game_contract(self):
         # Verify the exact real-game action script before dispatch; it reaches four action frames.

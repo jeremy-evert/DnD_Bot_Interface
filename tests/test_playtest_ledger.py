@@ -10,6 +10,7 @@ from playtest.detectors import DETECTOR_VERSION, curiosity_events, run_all, sess
 from playtest.ledger import append_entry, head_hash, make_entry, verify_ledger
 from playtest.run_ledger_cli import build_entry
 from playtest.report import compare, poisson_ci, render_markdown
+from playtest.schema import canonical_json, load_ledger_entry, validate_ledger_entry
 from playtest.transcript import load_transcript
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,43 @@ class LedgerTests(unittest.TestCase):
         actual = verify_ledger(self.path)[0]
         self.assertFalse(actual["eligibility"]["comparison_eligible"])
         self.assertEqual(actual["eligibility"]["reason_code"], "RUN_OUTCOME_INCOMPLETE_DISPATCH")
+
+    def test_inconclusive_detector_note_withholds_zero_rate_claim_and_delta(self):
+        note = {"kind": "INCONCLUSIVE", "mode": "FAIL_WITH_NOTHING", "turn_ids": [1],
+                "quote": "A blue moth circles the seventh arch before dawn.",
+                "rationale": "Death wording cannot be classified.", "detector_version": DETECTOR_VERSION}
+        baseline = base("baseline", detector_notes=[note])
+        candidate = base("candidate")
+        self.assertEqual(baseline["detector_inconclusive_modes"], ["FAIL_WITH_NOTHING"])
+        report = compare([baseline], [candidate])
+        mode = report["per_mode"]["detector:FAIL_WITH_NOTHING"]
+        self.assertEqual(mode["baseline_count"], 0)
+        self.assertIsNone(mode["paired_delta_count"])
+        self.assertEqual(mode["rate_status"], "not established (inconclusive evidence)")
+        self.assertIsNone(report["zero_statement"])
+        rendered = render_markdown(report)
+        self.assertIn("FAIL_WITH_NOTHING INCONCLUSIVE(1)", rendered)
+        self.assertIn("not established (inconclusive evidence)", rendered)
+        self.assertIn("withheld", rendered)
+        self.assertNotIn("zero verified instances", rendered)
+
+    def test_v21_entry_loads_empty_inconclusive_fields_and_marks_them_legacy(self):
+        old = base("v21", schema_minor=1, severity_taxonomy_version="1")
+        old.pop("detector_notes")
+        old.pop("detector_inconclusive_modes")
+        self.assertEqual(validate_ledger_entry(old), "legacy_detector_notes")
+        path = self.path.with_name("v21-entry.json")
+        path.write_text(canonical_json(old) + "\n", encoding="utf-8")
+        loaded = load_ledger_entry(path)
+        self.assertEqual(loaded["detector_notes"], [])
+        self.assertEqual(loaded["detector_inconclusive_modes"], [])
+        self.assertEqual(loaded.legacy_fields, {"detector_notes", "detector_inconclusive_modes"})
+
+    def test_detector_notes_are_strictly_validated(self):
+        bad = {"kind": "UNKNOWN", "mode": "FAIL_WITH_NOTHING", "turn_ids": [1],
+               "quote": "death", "rationale": "reason", "detector_version": DETECTOR_VERSION}
+        with self.assertRaisesRegex(ValueError, "unsupported detector note kind"):
+            base("bad", detector_notes=[bad])
 
     def test_paired_keys_mismatches_and_content_loss(self):
         b = base("b", coverage={"rooms_visited": 4, "objects_touched": 2, "encounters_faced": 1})

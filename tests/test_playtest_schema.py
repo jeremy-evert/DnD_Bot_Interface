@@ -6,10 +6,34 @@ import tempfile
 import unittest
 
 from playtest.schema import (LegacyArtifact, RUN_RECEIPT_FIELDS, canonical_json, load_run_receipt,
-                             source_digest, source_manifest, strict_json_loads, validate_manifest)
+                             source_digest, source_manifest, strict_json_loads, validate_manifest,
+                             SEVERITY_TAXONOMY, SEVERITY_TAXONOMY_VERSION, normalize_instance)
 
 
 class SchemaContractTests(unittest.TestCase):
+    def test_taxonomy_v2_has_delves_modes_and_unknown_modes_are_rejected(self):
+        expected = {
+            "UNRECOGNIZED_COMMAND": 2, "UNSUPPORTED_INTENT": 3,
+            "REPEATED_RESPONSE": 3, "NO_CONSEQUENCE_STALL": 4,
+            "DOMINANT_ACTION": 3, "DOMINANT_ACTION_SOFT": 1,
+            "MISSING_TELEGRAPH": 5, "FAIL_WITH_NOTHING": 3,
+            "INPUT_TAX": 2, "STALLED_RUN": 3, "UNSIGNALED_DEAD_END": 4,
+            "INERT_OBJECT": 2, "UNREADABLE_CLUE": 4, "UNREAD_FLAG": 2,
+            "LATENCY_BREAK": 4,
+        }
+        self.assertEqual(SEVERITY_TAXONOMY_VERSION, "2")
+        for mode, severity in expected.items():
+            with self.subTest(mode=mode):
+                self.assertEqual(SEVERITY_TAXONOMY[mode], severity)
+                item = normalize_instance(source="detector", mode=mode, turn_ids=[1],
+                    quote="evidence", rationale="reason", evidence_kind="transcript",
+                    evidence_sha256="a" * 64)
+                self.assertEqual(item["severity"], severity)
+        with self.assertRaisesRegex(ValueError, "unknown severity mode"):
+            normalize_instance(source="detector", mode="NOT_A_MODE", turn_ids=[1],
+                quote="evidence", rationale="reason", evidence_kind="transcript",
+                evidence_sha256="a" * 64)
+
     def test_duplicate_json_keys_and_nonfinite_values_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             strict_json_loads('{"x":1,"x":2}')

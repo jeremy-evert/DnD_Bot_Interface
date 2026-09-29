@@ -126,6 +126,7 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
     detector_result = run_all(records, journal, game_id=game_id)
     detector_set_status = "IMPLEMENTED" if isinstance(detector_result, list) else detector_result["status"]
     instances = detector_result if isinstance(detector_result, list) else detector_result["instances"]
+    detector_notes = list(getattr(detector_result, "notes", ()))
     verify_instance_quotes(records, instances)
     normalized = _normalize_detectors(records, instances, run_dir)
     judge_instances, judge_status = None, "NOT_REQUESTED"
@@ -204,7 +205,7 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
         discarded_judge_claims=discarded, curiosity=curiosity_events(records), coverage=facts,
         content_catalog=manifest["content_catalog"], eligibility_flags=eligibility,
         expected_content_change=None, game_id=game_id, schema_minor=manifest.get("schema_minor", 0),
-        detector_set_status=detector_set_status)
+        detector_set_status=detector_set_status, detector_notes=detector_notes)
 
 
 def main(argv=None):

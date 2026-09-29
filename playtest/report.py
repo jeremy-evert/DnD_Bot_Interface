@@ -150,12 +150,17 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
         if id(row) not in used_right and not any(item.get("run_id") == row.get("run_id") for item in ineligible):
             ineligible.append({"run_id": row.get("run_id"), "reason": "UNPAIRED_CANDIDATE"})
     ineligible.sort(key=lambda row: (str(row.get("run_id", row.get("baseline_run_id", ""))), row["reason"]))
-    modes = set(); static_modes = set()
+    modes = set(); static_modes = set(); inconclusive = {}
     for pair in pairs:
         for side in ("baseline", "candidate"):
             for item in pair[side].get("verified_instances", []):
                 label = f"{item['source']}:{item['mode']}"
                 (static_modes if item["evidence_kind"] == "static_probe" else modes).add(label)
+            for note in pair[side].get("detector_notes", []):
+                if note.get("kind") == "INCONCLUSIVE":
+                    label = f"detector:{note['mode']}"
+                    inconclusive[label] = inconclusive.get(label, 0) + 1
+                    modes.add(label)
     mode_rows = {}; overlap = False
     for label in sorted(modes):
         source, mode = label.split(":", 1)
@@ -167,14 +172,21 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
         ccount = sum(count(p["candidate"]) for p in pairs)
         bt = sum(p["baseline"].get("turns", 0) for p in pairs)
         ct = sum(p["candidate"].get("turns", 0) for p in pairs)
-        bci, cci = poisson_ci(bcount), poisson_ci(ccount)
-        rate_ci_b = tuple(100 * x / bt for x in bci); rate_ci_c = tuple(100 * x / ct for x in cci)
-        intersects = max(rate_ci_b[0], rate_ci_c[0]) <= min(rate_ci_b[1], rate_ci_c[1])
-        overlap |= intersects
-        mode_rows[label] = {"baseline_count": bcount, "candidate_count": ccount,
-            "baseline_rate_per_100": rate_per_100(bcount, bt), "candidate_rate_per_100": rate_per_100(ccount, ct),
-            "baseline_ci_per_100": rate_ci_b, "candidate_ci_per_100": rate_ci_c,
-            "paired_delta_count": ccount-bcount}
+        if label in inconclusive:
+            mode_rows[label] = {"baseline_count": bcount, "candidate_count": ccount,
+                "baseline_rate_per_100": None, "candidate_rate_per_100": None,
+                "baseline_ci_per_100": None, "candidate_ci_per_100": None,
+                "paired_delta_count": None, "inconclusive_count": inconclusive[label],
+                "rate_status": "not established (inconclusive evidence)"}
+        else:
+            bci, cci = poisson_ci(bcount), poisson_ci(ccount)
+            rate_ci_b = tuple(100 * x / bt for x in bci); rate_ci_c = tuple(100 * x / ct for x in cci)
+            intersects = max(rate_ci_b[0], rate_ci_c[0]) <= min(rate_ci_b[1], rate_ci_c[1])
+            overlap |= intersects
+            mode_rows[label] = {"baseline_count": bcount, "candidate_count": ccount,
+                "baseline_rate_per_100": rate_per_100(bcount, bt), "candidate_rate_per_100": rate_per_100(ccount, ct),
+                "baseline_ci_per_100": rate_ci_b, "candidate_ci_per_100": rate_ci_c,
+                "paired_delta_count": ccount-bcount, "inconclusive_count": 0, "rate_status": None}
     static_rows = {}
     for label in sorted(static_modes):
         source, mode = label.split(":", 1)
@@ -183,11 +195,12 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
                               "candidate_count": sum(1 for pair in pairs for item in pair["candidate"].get("verified_instances", [])
                                    if item["source"] == source and item["mode"] == mode and item["evidence_kind"] == "static_probe")}
     curiosity = [{"baseline": pair["baseline"].get("curiosity", {}), "candidate": pair["candidate"].get("curiosity", {})} for pair in pairs]
-    zeros = [mode for mode, row in mode_rows.items() if row["baseline_count"] == row["candidate_count"] == 0]
+    zeros = [mode for mode, row in mode_rows.items() if row["baseline_count"] == row["candidate_count"] == 0 and mode not in inconclusive]
     return {"paired_count": len(pairs), "pairs": pairs, "ineligible": ineligible, "per_mode": mode_rows,
             "static_probe_counts": static_rows, "curiosity_separate": curiosity,
             "evidence_statement": "not enough evidence to claim improvement" if overlap or not pairs else "paired intervals do not overlap; interpret cautiously",
-            "zero_statement": "zero verified instances" if zeros else None, "zero_modes": zeros,
+            "zero_statement": "zero verified instances" if zeros and not inconclusive else None, "zero_modes": zeros,
+            "inconclusive_modes": inconclusive,
             "sample_size_note": "Single-cycle model-player rates are problem discovery, not measurement; trend claims need repeated paired seeds."}
 
 
@@ -233,9 +246,20 @@ def compare_cross_game(baseline_entries, candidate_entries, spec):
     mode_deltas = None
     if rates_implemented and pairs:
         labels = sorted({(item["source"], item["mode"]) for pair in pairs for side in ("baseline", "candidate")
-                         for item in pair[side].get("verified_instances", []) if item.get("evidence_kind") == "transcript"})
+                         for item in pair[side].get("verified_instances", []) if item.get("evidence_kind") == "transcript"}
+                        | {("detector", note["mode"]) for pair in pairs for side in ("baseline", "candidate")
+                           for note in pair[side].get("detector_notes", []) if note.get("kind") == "INCONCLUSIVE"})
         mode_deltas = {}
         for source, mode in labels:
+            unresolved = sum(1 for pair in pairs for side in ("baseline", "candidate")
+                             for note in pair[side].get("detector_notes", [])
+                             if source == "detector" and note.get("kind") == "INCONCLUSIVE" and note.get("mode") == mode)
+            if unresolved:
+                mode_deltas[f"{source}:{mode}"] = {"baseline_rate_per_100": None,
+                    "candidate_rate_per_100": None, "descriptive_delta_per_100": None,
+                    "inconclusive_count": unresolved,
+                    "rate_status": "not established (inconclusive evidence)"}
+                continue
             counts, turns = [], []
             for side in ("baseline", "candidate"):
                 count = sum(1 for pair in pairs for item in pair[side].get("verified_instances", [])
@@ -258,8 +282,16 @@ def render_markdown(report):
              "| Source:mode | Baseline raw | Candidate raw | Baseline /100 (95% CI) | Candidate /100 (95% CI) | Paired delta |",
              "|---|---:|---:|---:|---:|---:|"]
     for mode, row in sorted(report["per_mode"].items()):
-        bci, cci = row["baseline_ci_per_100"], row["candidate_ci_per_100"]
-        lines.append(f"| {mode} | {row['baseline_count']} | {row['candidate_count']} | {row['baseline_rate_per_100']:.2f} ({bci[0]:.2f}–{bci[1]:.2f}) | {row['candidate_rate_per_100']:.2f} ({cci[0]:.2f}–{cci[1]:.2f}) | {row['paired_delta_count']:+d} |")
+        label = f"{mode} INCONCLUSIVE({row['inconclusive_count']})" if row.get("inconclusive_count") else mode
+        if row.get("rate_status"):
+            baseline_rate = candidate_rate = row["rate_status"]
+            delta = "withheld"
+        else:
+            bci, cci = row["baseline_ci_per_100"], row["candidate_ci_per_100"]
+            baseline_rate = f"{row['baseline_rate_per_100']:.2f} ({bci[0]:.2f}–{bci[1]:.2f})"
+            candidate_rate = f"{row['candidate_rate_per_100']:.2f} ({cci[0]:.2f}–{cci[1]:.2f})"
+            delta = f"{row['paired_delta_count']:+d}"
+        lines.append(f"| {label} | {row['baseline_count']} | {row['candidate_count']} | {baseline_rate} | {candidate_rate} | {delta} |")
     if report.get("static_probe_counts"):
         lines += ["", "Static probe instances (not action-turn rates)", ""]
         for mode, row in sorted(report["static_probe_counts"].items()):

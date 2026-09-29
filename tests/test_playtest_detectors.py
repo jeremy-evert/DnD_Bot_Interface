@@ -141,10 +141,16 @@ class DetectorTests(unittest.TestCase):
                 results = run_all(clean)
                 self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in results})
                 self.assertFalse(results.notes, wording)
-        unknown = run_all(fixtures.death_wording_real_harness(
-            "A blue moth circles the seventh arch before dawn."))
+        unknown_rows = fixtures.death_wording_real_harness(
+            "A blue moth circles the seventh arch before dawn.")
+        unknown = run_all(unknown_rows)
         self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in unknown})
-        self.assertTrue(any(note["mode"] == "INCONCLUSIVE" for note in unknown.notes))
+        self.assertTrue(any(note["mode"] == "FAIL_WITH_NOTHING" for note in unknown.notes))
+        note = unknown.notes[0]
+        self.assertEqual(set(note), {"kind", "mode", "turn_ids", "quote", "rationale", "detector_version"})
+        self.assertEqual(note["kind"], "INCONCLUSIVE")
+        self.assertEqual(note["turn_ids"], [unknown_rows[-1]["turn_id"]])
+        self.assertEqual(note["quote"], "A blue moth circles the seventh arch before dawn.")
 
     def test_real_harness_provenance_table_executes_every_twin(self):
         expected = {"repeated_response_real_harness", "no_consequence_stall_real_harness",

@@ -201,9 +201,10 @@ def run_all(records, journal=None, content=None, game_id="dnd_combat"):
         if terminal and is_known_empty and not has_evidence:
             _add(out, "FAIL_WITH_NOTHING", r, terminal, "Death message gives no cause, retry path, or carry-over.", 3)
         elif terminal and not has_evidence and not is_known_empty:
-            out.notes.append({"mode": "INCONCLUSIVE", "turn_ids": [r["turn_id"]],
-                              "quote": terminal,
-                              "rationale": "Death wording matches neither cause/retry/carry-over evidence nor the explicit empty-terminal examples."})
+            out.notes.append({"kind": "INCONCLUSIVE", "mode": "FAIL_WITH_NOTHING",
+                              "turn_ids": [r["turn_id"]], "quote": terminal,
+                              "rationale": "Death wording matches neither cause/retry/carry-over evidence nor the explicit empty-terminal examples.",
+                              "detector_version": DETECTOR_VERSION})
     out.extend(probe_conventions())
     return out
 

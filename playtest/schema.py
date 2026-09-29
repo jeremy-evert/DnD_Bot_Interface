@@ -15,7 +15,7 @@ import subprocess
 from typing import Any, Literal
 
 SCHEMA_VERSION = 2
-SCHEMA_MINOR = 1
+SCHEMA_MINOR = 2
 LEGACY_VERSION = 1
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 GAME_IDS = {"dnd_combat", "delve"}
@@ -123,6 +123,24 @@ class LedgerEntry:
     per_mode_verified_instances: dict; severity_weighted_counts: dict
     verified_instances: list[dict]; content_catalog: dict; catalog_sha256: str
     coverage: dict; curiosity: dict; expected_content_change: str | None; eligibility: dict
+    detector_notes: list[dict]; detector_inconclusive_modes: list[str]
+
+
+class LedgerCompatibleDict(GameCompatibleDict):
+    """Expose v2.1's absent inconclusive-note fields without changing stored bytes."""
+    def __init__(self, value, legacy_fields=()):
+        super().__init__(value)
+        self.legacy_fields = frozenset(legacy_fields)
+
+    def __getitem__(self, key):
+        if key not in self and key in {"detector_notes", "detector_inconclusive_modes"}:
+            return []
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key not in self and key in {"detector_notes", "detector_inconclusive_modes"}:
+            return []
+        return super().get(key, default)
 
 
 def canonical_json(value: Any) -> str:
@@ -267,10 +285,12 @@ LEDGER_ENTRY_FIELDS = {
     "severity_weighted_counts": dict, "verified_instances": list,
     "content_catalog": dict, "catalog_sha256": str, "coverage": dict,
     "curiosity": dict, "expected_content_change": (str, type(None)), "eligibility": dict,
+    "detector_notes": list, "detector_inconclusive_modes": list,
 }
 
-SEVERITY_TAXONOMY_VERSION = "1"
-SEVERITY_TAXONOMY = {
+SEVERITY_TAXONOMY_VERSION = "2"
+LEGACY_SEVERITY_TAXONOMY_VERSION = "1"
+LEGACY_SEVERITY_TAXONOMY = {
     "UNRECOGNIZED_COMMAND": 2, "UNSUPPORTED_INTENT": 3,
     "HOLLOW_CONSEQUENCE": 4, "WORLD_STATE_CONTRADICTION": 5,
     "INERT_TAKEABLE": 2, "NO_CONSEQUENCE_STALL": 4,
@@ -283,6 +303,18 @@ SEVERITY_TAXONOMY = {
     "NEVER_CLOSED_MYSTERY": 4, "TUTORIAL_CLIFF": 4,
     "MENU_WALL": 3, "NARRATOR_INVENTION": 4,
 }
+SEVERITY_TAXONOMY = {
+    **LEGACY_SEVERITY_TAXONOMY,
+    "INERT_OBJECT": 2,
+    "MISSING_TELEGRAPH": 5, "INPUT_TAX": 2, "STALLED_RUN": 3,
+    "UNSIGNALED_DEAD_END": 4, "UNREADABLE_CLUE": 4,
+    "UNREAD_FLAG": 2, "LATENCY_BREAK": 4,
+}
+
+
+def _validate_taxonomy_version(value):
+    if value not in {LEGACY_SEVERITY_TAXONOMY_VERSION, SEVERITY_TAXONOMY_VERSION}:
+        raise ValueError("unsupported severity taxonomy version")
 
 
 def _validate_files(files, label):
@@ -310,8 +342,16 @@ def _validate_version(value, fields, label):
     # Schema 2.0 artifacts remain readable with their original byte identity.
     # Their absent game identity is interpreted as the frozen D&D baseline.
     identity_fields = {"schema_minor", "game_id", "game_entrypoint", "game_tree_spec", "detector_set_status"}
-    if "game_id" not in value and "game_id" in fields:
+    if label == "ledger entry" and value.get("schema_minor") == 1:
+        legacy_note_fields = {"detector_notes", "detector_inconclusive_modes"}
+        if not legacy_note_fields.intersection(value):
+            _typed(value, {key: spec for key, spec in fields.items() if key not in legacy_note_fields}, label)
+            return "legacy_detector_notes"
+        _typed(value, fields, label)
+    elif "game_id" not in value and "game_id" in fields:
         optional_identity = identity_fields | ({"sandbox_policy"} if label == "run receipt" else set())
+        if label == "ledger entry":
+            optional_identity |= {key for key in ("detector_notes", "detector_inconclusive_modes") if key not in value}
         _typed(value, {key: spec for key, spec in fields.items() if key not in optional_identity}, label)
     else:
         _typed(value, fields, label)
@@ -321,7 +361,7 @@ def _validate_version(value, fields, label):
 def _game_identity(value):
     game_id = value.get("game_id", "dnd_combat")
     if game_id not in GAME_IDS: raise ValueError("unsupported game_id")
-    if value.get("schema_minor", 0) not in {0, SCHEMA_MINOR}: raise ValueError("unsupported schema_minor")
+    if value.get("schema_minor", 0) not in {0, 1, SCHEMA_MINOR}: raise ValueError("unsupported schema_minor")
     if value.get("game_entrypoint", GAME_ENTRYPOINTS[game_id]) != GAME_ENTRYPOINTS[game_id]:
         raise ValueError("game_entrypoint does not match game_id")
     if value.get("game_tree_spec", GAME_TREE_SPECS[game_id]) != GAME_TREE_SPECS[game_id]:
@@ -347,7 +387,7 @@ def validate_manifest(value):
         raise ValueError("manifest identity strings must not be empty")
     if value["narrator_policy"] != "plain" or value["turn_policy"] != "action_frames_v1": raise ValueError("unsupported manifest policy")
     if value["measurement_policy"] not in {"detector_only", "detector_and_judge"}: raise ValueError("unsupported measurement policy")
-    if value["severity_taxonomy_version"] != SEVERITY_TAXONOMY_VERSION: raise ValueError("unsupported severity taxonomy version")
+    _validate_taxonomy_version(value["severity_taxonomy_version"])
     if value["turn_cap"] <= 0: raise ValueError("turn_cap must be positive")
     if value["is_holdout"] != (value["holdout_prompt_sha256"] is not None): raise ValueError("holdout identity must be explicit")
     if value["is_holdout"] and value["holdout_prompt_sha256"] != value["persona_prompt_sha256"]: raise ValueError("holdout prompt identity mismatch")
@@ -394,7 +434,7 @@ def validate_run_receipt(value):
     if value["termination"] not in {"playing", "won", "dead", "quit", "error"}: raise ValueError("invalid termination")
     if value["run_outcome"] not in {"COMPLETE", "INCOMPLETE_DISPATCH", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE", "GAME_MODIFIED_DURING_RUN", "ERROR"}: raise ValueError("invalid run_outcome")
     if value["audit_status"] not in {"CLEAN", "VIOLATED", "UNVERIFIABLE"}: raise ValueError("invalid audit_status")
-    if value["severity_taxonomy_version"] != SEVERITY_TAXONOMY_VERSION: raise ValueError("unsupported severity taxonomy version")
+    _validate_taxonomy_version(value["severity_taxonomy_version"])
     if value["turns"] < 0 or value["transcript_record_count"] != value["turns"] + 1:
         raise ValueError("run receipt must count action frames separately from the setup record")
     if value["journal_record_count"] < 0: raise ValueError("journal_record_count must be nonnegative")
@@ -439,7 +479,7 @@ def validate_judge_receipt(value):
     if legacy: return legacy
     for field in ("manifest_sha256", "transcript_head_chain_hash", "journal_sha256", "bundle_sha256", "prompt_sha256"): _digest(value[field], "judge_receipt." + field)
     if value["judge_outcome"] not in {"COMPLETE", "INCOMPLETE_JUDGE", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE"}: raise ValueError("invalid judge_outcome")
-    if value["severity_taxonomy_version"] != SEVERITY_TAXONOMY_VERSION: raise ValueError("unsupported severity taxonomy version")
+    _validate_taxonomy_version(value["severity_taxonomy_version"])
     if value["audit_status"] not in {"CLEAN", "VIOLATED", "UNVERIFIABLE"} or type(value["audit_events_seen"]) is not int or value["audit_events_seen"] < 0: raise ValueError("invalid judge audit receipt")
     if type(value["discarded_judge_claims"]) is not int or value["discarded_judge_claims"] < 0: raise ValueError("discarded_judge_claims must be nonnegative")
     for instance in value["counted"]: validate_verified_instance(instance)
@@ -452,7 +492,7 @@ def validate_judge_receipt(value):
 
 def validate_ledger_entry(value):
     legacy = _validate_version(value, LEDGER_ENTRY_FIELDS, "ledger entry")
-    if legacy: return legacy
+    if legacy and legacy != "legacy_detector_notes": return legacy
     _game_identity(value)
     if value.get("detector_set_status", "IMPLEMENTED") not in {"IMPLEMENTED", "NOT_IMPLEMENTED"}: raise ValueError("invalid detector_set_status")
     for field in ("manifest_sha256", "run_receipt_sha256", "transcript_head_chain_hash", "journal_sha256", "game_sha", "harness_sha", "persona_prompt_sha256", "catalog_sha256"): _digest(value[field], "ledger." + field)
@@ -461,7 +501,7 @@ def validate_ledger_entry(value):
     if not value["run_id"] or not value["session_id"] or not value["persona_id"]: raise ValueError("ledger identities must not be empty")
     if value["run_outcome"] not in {"COMPLETE", "INCOMPLETE_DISPATCH", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE", "GAME_MODIFIED_DURING_RUN", "ERROR"}: raise ValueError("invalid ledger run_outcome")
     if value["measurement_policy"] not in {"detector_only", "detector_and_judge"}: raise ValueError("invalid ledger measurement_policy")
-    if value["severity_taxonomy_version"] != SEVERITY_TAXONOMY_VERSION: raise ValueError("unsupported severity taxonomy version")
+    _validate_taxonomy_version(value["severity_taxonomy_version"])
     if value["judge_status"] not in {"NOT_REQUESTED", "COMPLETE", "INCOMPLETE", "INVALID"}: raise ValueError("invalid judge_status")
     validate_content_catalog(value["content_catalog"])
     if catalog_digest(value["content_catalog"]) != value["catalog_sha256"]: raise ValueError("ledger catalog identity mismatch")
@@ -469,6 +509,25 @@ def validate_ledger_entry(value):
     if value["judge_status"] == "NOT_REQUESTED" and (value["judge_receipt_sha256"] is not None or value["judge_counted_instances"] is not None): raise ValueError("NOT_REQUESTED judge must have null receipt and count")
     if value["judge_status"] == "COMPLETE" and (value["judge_receipt_sha256"] is None or value["judge_counted_instances"] is None): raise ValueError("COMPLETE judge requires bound receipt and count")
     if value["measurement_policy"] == "detector_and_judge" and value["judge_status"] == "NOT_REQUESTED": raise ValueError("required judge cannot be NOT_REQUESTED")
+    notes = value.get("detector_notes", [])
+    inconclusive_modes = value.get("detector_inconclusive_modes", [])
+    expected_modes = set()
+    for note in notes:
+        _typed(note, {"kind": str, "mode": str, "turn_ids": list, "quote": str,
+                      "rationale": str, "detector_version": str}, "detector note")
+        if note["kind"] != "INCONCLUSIVE": raise ValueError("unsupported detector note kind")
+        if not isinstance(note["mode"], str) or note["mode"] not in SEVERITY_TAXONOMY:
+            raise ValueError("unknown detector note mode")
+        if not note["detector_version"] or not note["rationale"]: raise ValueError("detector note provenance must not be empty")
+        if any(type(turn) is not int or turn < 0 for turn in note["turn_ids"]): raise ValueError("detector note turn_ids must be nonnegative integers")
+        if note["turn_ids"] != sorted(set(note["turn_ids"])): raise ValueError("detector note turn_ids must be sorted and unique")
+        expected_modes.add(note["mode"])
+    if any(not isinstance(mode, str) for mode in inconclusive_modes):
+        raise ValueError("detector inconclusive modes must be strings")
+    if any(mode not in SEVERITY_TAXONOMY for mode in inconclusive_modes):
+        raise ValueError("unknown detector inconclusive mode")
+    if inconclusive_modes != sorted(set(inconclusive_modes)) or set(inconclusive_modes) != expected_modes:
+        raise ValueError("detector_inconclusive_modes must be sorted, unique, and match detector_notes")
     for instance in value["verified_instances"]: validate_verified_instance(instance)
     instance_ids = [instance["instance_id"] for instance in value["verified_instances"]]
     if len(instance_ids) != len(set(instance_ids)): raise ValueError("duplicate verified instance id")
@@ -489,6 +548,7 @@ def validate_ledger_entry(value):
             value["eligibility"].get("comparison_eligible") is True or
             value["eligibility"].get("reason_code") != "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"):
         raise ValueError("unimplemented detector set cannot be comparison eligible")
+    if legacy == "legacy_detector_notes": return legacy
 
 
 def source_manifest(root, kind, game_id="dnd_combat"):
@@ -578,9 +638,15 @@ def load_ledger_entry(path):
     raw = Path(path).read_text(encoding="utf-8")
     value = strict_json_loads(raw)
     marker = validate_ledger_entry(value)
-    if marker is None and raw != canonical_json(value) + "\n": raise ValueError("ledger entry serialization is not canonical")
-    if marker: return marker
-    return GameCompatibleDict(value) if "game_id" not in value else value
+    if isinstance(marker, LegacyArtifact): return marker
+    if raw != canonical_json(value) + "\n": raise ValueError("ledger entry serialization is not canonical")
+    legacy_fields = ({"detector_notes", "detector_inconclusive_modes"}
+                     if marker == "legacy_detector_notes" or
+                     not {"detector_notes", "detector_inconclusive_modes"}.issubset(value)
+                     else ())
+    if legacy_fields or "game_id" not in value:
+        return LedgerCompatibleDict(value, legacy_fields)
+    return value
 
 
 def load_artifact(path, validator):

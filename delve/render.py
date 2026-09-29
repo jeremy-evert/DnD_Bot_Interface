@@ -96,7 +96,7 @@ def _bar(value, maximum):
     return "#" * value + "." * (int(maximum) - value)
 
 
-def render_status(state, pack):
+def render_status(state, pack, memory=None):
     bank = _bank(pack)
     room = next((r for r in _get(pack, "rooms", ()) if _get(r, "id") == _get(state, "room_id")), None)
     if room is None:
@@ -123,7 +123,7 @@ def render_status(state, pack):
         if _get(enemy, "room_id") == _get(room, "id") and runtime.get("hp", 0) > 0:
             living_enemy = (enemy, runtime)
             break
-    memory = RenderMemory()
+    memory = memory if memory is not None else RenderMemory()
     if living_enemy:
         enemy, runtime = living_enemy
         intent_id = runtime.get("current_intent_id")
@@ -132,8 +132,23 @@ def render_status(state, pack):
         if intent:
             telegraph_entry = bank.get(_get(intent, "telegraph_key"))
             if telegraph_entry:
-                telegraph = _slot_value(telegraph_entry, {}, _get(intent, "telegraph_key"), memory)
-        lines.append(f"{_get(enemy, 'name')} {runtime.get('hp', 0)}/{_get(enemy, 'stats').hp} HP [{runtime.get('zone', _get(enemy, 'start_zone', 'near'))}] — {telegraph}")
+                enemy_name = _get(enemy, "name")
+                telegraph = _slot_value(telegraph_entry, {"enemy_name": enemy_name}, _get(intent, "telegraph_key"), memory)
+                doubled = f"{enemy_name}: {enemy_name}"
+                if telegraph.casefold().startswith(doubled.casefold()):
+                    telegraph = f"{enemy_name}:" + telegraph[len(doubled):]
+        enemy_name = _get(enemy, "name")
+        hp_text = f"{runtime.get('hp', 0)}/{_get(enemy, 'stats').hp} HP [{runtime.get('zone', _get(enemy, 'start_zone', 'near'))}]"
+        name_prefix = str(enemy_name)
+        if telegraph.casefold().startswith((name_prefix + ":").casefold()):
+            body = telegraph[len(name_prefix) + 1:].lstrip()
+            if body.startswith("—"):
+                body = body[1:].lstrip()
+            lines.append(f"{name_prefix} {hp_text} — {body}")
+        elif telegraph.casefold().startswith(name_prefix.casefold()):
+            lines.append(f"{telegraph} — {hp_text}")
+        else:
+            lines.append(f"{name_prefix} {hp_text} — {telegraph}")
     else:
         desc_key = _get(room, "description_key")
         desc_entry = bank.get(desc_key)

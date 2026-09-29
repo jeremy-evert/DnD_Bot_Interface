@@ -81,6 +81,18 @@ class DelveRenderTests(unittest.TestCase):
         self.assertEqual(self.pack,before_pack)
         self.assertEqual(random.getstate(),random_before)
 
+    def test_combat_status_fills_enemy_telegraph_slot_once(self):
+        pack = load_pack(Path(__file__).parents[1] / "delve" / "content" / "mossy_fast_slice.json")
+        state = DelveState.new(pack, 1, "fighter")
+        state.room_id = "hollow_vault"
+        state.player["zone"] = "doorway"
+        memory = RenderMemory()
+        screen = render_status(state, pack, memory)
+        self.assertEqual(memory.problems, [])
+        combat_line = screen.splitlines()[1]
+        self.assertEqual(combat_line.count("Hobgoblin Captain"), 1)
+        self.assertIn("Hobgoblin Captain", combat_line)
+
     def test_import_boundary_has_no_engine_or_network_dependencies(self):
         import ast
         source = Path(__file__).parents[1] / "delve" / "render.py"

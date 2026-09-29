@@ -1,4 +1,12 @@
-"""Append-only, hash-chained summaries of verified playtest runs."""
+"""Append-only, hash-chained summaries of verified playtest runs.
+
+The local .head anchor detects partial edits, deletion, and truncation. It is not
+an identity proof: a writer able to rewrite both ledger and anchor can forge a
+new internally consistent history. Record :func:`head_hash` in an independently
+protected receipt (for example, a committed evidence file) to detect that case.
+This design does not defend against an attacker able to rewrite that external
+anchor too.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +25,16 @@ def _entry_hash(entry):
     return hashlib.sha256((entry["prev_hash"] + canonical_json(body)).encode("utf-8")).hexdigest()
 
 
-def verify_ledger(path):
+def head_hash(path):
+    """Return the current locally anchored chain hash (ZERO_HASH for empty)."""
+    path = Path(path)
+    if not path.exists():
+        raise ValueError("ledger is missing")
+    entries = verify_ledger(path)
+    return entries[-1]["entry_hash"] if entries else ZERO_HASH
+
+
+def verify_ledger(path, expected_head=None):
     path = Path(path)
     entries, previous = [], ZERO_HASH
     if not path.exists():
@@ -43,6 +60,8 @@ def verify_ledger(path):
         raise ValueError("ledger head anchor is missing or invalid") from exc
     if anchor != {"record_count": len(entries), "chain_hash": previous}:
         raise ValueError("ledger head anchor mismatch (ledger may be truncated or altered)")
+    if expected_head is not None and expected_head != previous:
+        raise ValueError("ledger expected head mismatch")
     return entries
 
 
@@ -73,6 +92,8 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
     facts = dict(eligibility_flags or {})
     eligible = run_outcome == "COMPLETE"
     reason = None if eligible else "RUN_OUTCOME_" + run_outcome
+    if facts.get("comparison_eligible") is False:
+        eligible, reason = False, facts.get("reason_code") or "INELIGIBLE"
     facts.update(comparison_eligible=eligible, reason_code=reason)
     return {"ledger_version": LEDGER_VERSION, "run_id": run_id, "game_sha": game_sha,
             "harness_sha": harness_sha, "detector_version": detector_version,
@@ -86,6 +107,8 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
             "run_outcome": run_outcome, "termination": termination, "turns": turns,
             "per_mode_verified_instances": counts, "severity_weighted_counts": weighted,
             "curiosity": dict(curiosity or {}),
+            "content_inventory": dict(extra.get("content_inventory") or {}),
+            "expected_content_change": extra.get("expected_content_change"),
             "coverage": {"rooms_visited": int(cov.get("rooms_visited", 0)),
                          "objects_touched": int(cov.get("objects_touched", cov.get("distinct_object_names_touched", 0))),
                          "encounters_faced": int(cov.get("encounters_faced", 0))},

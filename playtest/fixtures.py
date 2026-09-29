@@ -56,11 +56,25 @@ def world_state_contradiction():
 
 
 def dominant_action():
-    return _records(["Your turn."] * 5, [["attack"]] * 5)
+    # Reuse actual combat output from a recorded game; only the hash-chained
+    # fixture sequence is synthesized to exercise the percentage boundary.
+    real = load_transcript(Path(__file__).parent / "fixtures" / "real" / "pilot1_explorer" / "transcript.jsonl")
+    sample = next(r["new_output"] for r in real if "Your turn." in r["new_output"] and " rolls " in r["new_output"])
+    return _records([sample] * 5, [["attack"]] * 5)
 
 
 def fail_with_nothing():
-    return _records(["You have fallen. The adventure ends here."], [["attack"]], termination="dead")
+    real = load_transcript(Path(__file__).parent / "fixtures" / "real" / "pilot4_newcomer" / "transcript.jsonl")
+    death = real[-1]["new_output"]
+    return _records([death], [["attack"]], termination="dead")
+
+
+def clean_death():
+    real = load_transcript(Path(__file__).parent / "fixtures" / "real" / "pilot4_newcomer" / "transcript.jsonl")
+    death = real[-1]["new_output"].replace(
+        "You have fallen. The adventure ends here.",
+        "You have fallen because the captain struck you down. Retry the adventure to try again.")
+    return _records([death], [["attack"]], termination="dead")
 
 
 def clean_route():

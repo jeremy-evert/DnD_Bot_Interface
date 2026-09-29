@@ -103,7 +103,9 @@ def run_all(records, journal=None, content=None):
             refused = bool(re.search(r"Choose (?:move|attack)|unrecognized|cannot|no one here|no exit|no passage", r["new_output"], re.I))
             prev = records[i-1]["snapshot"].get("canonical_state_hash") if i else None
             now = r["snapshot"].get("canonical_state_hash")
-            if not refused and prev and prev == now:
+            resolution = (" rolls " in r["new_output"] or " attacks! Initiative" in r["new_output"]
+                          or re.search(r"(?:'s|’s) turn\.\.\.", r["new_output"]))
+            if not refused and not resolution and prev and prev == now:
                 _add(out, "NO_CONSEQUENCE_STALL", r, r["new_output"].strip(), "Apparently accepted non-query action left canonical state unchanged.", 4)
     grouped = defaultdict(list)
     for r in records:
@@ -126,10 +128,15 @@ def run_all(records, journal=None, content=None):
     attacks = sum(any(c.lower().strip() in {"attack", "a"} for c in r["input_calls"]) for r in decisions)
     if len(decisions) >= 5 and attacks / len(decisions) >= .9:
         r = decisions[-1]; _add(out, "DOMINANT_ACTION", r, "Your turn.", "At least five hero combat decisions; attack share is at least 90%.", 3)
+    if len(decisions) >= 5 and attacks / len(decisions) >= .8:
+        r = decisions[-1]; _add(out, "DOMINANT_ACTION_SOFT", r, "Your turn.", "At least five hero combat decisions; attack share is at least 80%.", 1)
     if records and records[-1]["termination"] == "dead":
-        r = records[-1]; final = r["new_output"].strip()
-        if len(final) < 100 and not re.search(r"retry|because|cause|you were|killed by", final, re.I):
-            _add(out, "FAIL_WITH_NOTHING", r, final, "Short death ending provides no cause or retry path.", 3)
+        r = records[-1]
+        lines = r["new_output"].splitlines()
+        death = next((i for i, line in enumerate(lines) if "You have fallen" in line), None)
+        terminal = "\n".join(lines[death:]).strip() if death is not None else ""
+        if terminal and not re.search(r"retry|because|cause|you were|killed by|try again|carry|remember", terminal, re.I):
+            _add(out, "FAIL_WITH_NOTHING", r, terminal, "Death message gives no cause, retry path, or carry-over.", 3)
     out.extend(probe_conventions())
     return out
 
@@ -174,5 +181,8 @@ def curiosity_events(records):
 def session_facts(records):
     rooms = {r["snapshot"].get("room_id") for r in records if r["snapshot"].get("room_id")}
     combat = sum(any(c.lower().strip() in {"attack", "a", "use", "u", "potion"} for c in r.get("input_calls", [])) and "Your turn." in r["new_output"] for r in records)
+    attacks = sum(any(c.lower().strip() in {"attack", "a"} for c in r.get("input_calls", []))
+                  for r in records if any(c.lower().strip() in {"attack", "a", "use", "u", "potion"} for c in r.get("input_calls", [])) and "Your turn." in r["new_output"])
     return {"turns": len(records), "termination": records[-1]["termination"] if records else None,
-            "rooms_visited": len(rooms), "hero_combat_decisions": combat}
+            "rooms_visited": len(rooms), "hero_combat_decisions": combat,
+            "attack_share": attacks / combat if combat else 0.0}

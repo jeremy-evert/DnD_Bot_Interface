@@ -62,11 +62,11 @@ def _reader(v,p):
 def _objects(v,p):
     out=[]
     for i,x in enumerate(_arr(v,p)):
-        q=f'{p}[{i}]'; _obj(x,q,('id','name','zone'),('reader','atmosphere_only','atmosphere_id'))
+        q=f'{p}[{i}]'; _obj(x,q,('id','name','zone'),('reader','atmosphere_only','atmosphere_id','item_id'))
         reader=_reader(x['reader'],q+'.reader') if x.get('reader') is not None else None
         atm=_bool(x['atmosphere_only'],q+'.atmosphere_only') if 'atmosphere_only' in x else False
         if atm == (reader is not None): _err('E_OBJECT_READER_MISSING',q,'object must have exactly one reader or atmosphere_only')
-        out.append(m.GameObject(_id(x['id'],q+'.id'),_str(x['name'],q+'.name'),_str(x['zone'],q+'.zone'),reader,atm,_id(x['atmosphere_id'],q+'.atmosphere_id') if 'atmosphere_id' in x else None))
+        out.append(m.GameObject(_id(x['id'],q+'.id'),_str(x['name'],q+'.name'),_str(x['zone'],q+'.zone'),reader,atm,_id(x['atmosphere_id'],q+'.atmosphere_id') if 'atmosphere_id' in x else None,_id(x['item_id'],q+'.item_id') if 'item_id' in x else None))
     return tuple(out)
 def _parse(d):
     _obj(d,'$',('schema_version','id','title','start_room_id','atmosphere_registry','rooms','enemies','hazards','clocks','items','truth','terminals','bank'),('meta',))
@@ -156,6 +156,16 @@ def validate_pack(pack):
     for ident in all_ids:
             if ident in seen: _err('E_ID_DUPLICATE','$.','duplicate globally unique ID '+ident)
             seen[ident]=1
+    item_sources={}
+    for room in pack.rooms:
+        for obj in room.objects:
+            if obj.item_id is None: continue
+            if obj.item_id not in items: _err('E_ITEM_UNKNOWN',f'object {obj.id}.item_id','unknown item '+obj.item_id)
+            if obj.item_id in item_sources: _err('E_ITEM_DUPLICATE_SOURCE',f'object {obj.id}.item_id','item already has a source object')
+            item_sources[obj.item_id]=obj.id
+    if item_sources:
+        for key in ('get.blocked','get.not_takeable','use.nothing'):
+            _needbank({e.key:e for e in pack.bank},key,f'bank {key}')
     # Count before resolving individual clue/effect references so a deleted clue
     # is reported as an insufficient payoff source, as the spec mutation requires.
     reachable={pack.start_room_id}; todo=[pack.start_room_id]

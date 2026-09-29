@@ -341,3 +341,14 @@ Known fact enables the vault’s shove-to-collapse payoff; it is not a trivia an
 
 Target first run: 8–14 minutes, 25–45 input calls. Bank covers at least: `room.enter`, `room.return`, `object.read`, `item.get`, `item.use`, `enemy.intent`, `attack.hit`, `attack.miss`, `shove.success`, `shove.fail`, `brace.success`, `throw.interrupt`, `hazard.trigger`, `clock.tick`, `clock.threshold`, `clue.reveal`, `fact.payoff`, `terminal.victory`, `terminal.death`.
 
+
+## 6. Amendment 1 (Ivy, 2026-09-29): pickup semantics, found by the content unit
+
+The M1.2 schema had no link between a room `Object` and an inventory `Item`, so `get` was undefined. Binding rules:
+
+- `Object` gains an OPTIONAL field `item_id` (an `Item` id). An object with `item_id` is *takeable*; it still needs a `reader` (its look-reader) or `atmosphere_only`.
+- `get <object_id>` (or `g`/`take`): allowed only if the object is present in the current room AND no living enemy is in the room (otherwise event key `get.blocked`, fact slot `enemy_name`, no state change). On success: the item id is appended to `inventory`, the object is removed from that room's `present_objects`, event key `item.get` with slot `item_name`. Getting an object that is not takeable emits `get.not_takeable`.
+- `use <item_id>`: requires the item in inventory; fires the item's `reader` if its `on` is `use` and its `when_room_id`/`when_flag_id` conditions hold; else event `use.nothing`. `throw <item_id>`: requires the item in inventory and a living enemy with a declared intent; fires the item reader when `on` is `throw`.
+- `look <object_id>` fires the object's `reader` when `on` is `look` and its conditions hold (present in current room); readers with `when_flag_id` unmet emit the same object's `object.read` fallback event (never silence).
+- Enemies drop nothing in M1. The engine sets the reserved flag `__player_hp_zero` when player HP reaches 0 (the only reserved flag).
+- Validator additions: `item_id` must reference an existing item (E_ITEM_UNKNOWN); an item may be referenced by at most one object (E_ITEM_DUPLICATE_SOURCE); new bank keys required for `get.blocked`, `get.not_takeable`, `use.nothing` (E_BANK_FALLBACK_MISSING if absent) -- content units add them.

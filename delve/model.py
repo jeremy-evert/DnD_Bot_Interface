@@ -44,7 +44,7 @@ class Reader:
     on: str; event_key: str; effects: tuple[Effect,...]; when_room_id: str|None=None; when_flag_id: str|None=None
 @dataclass(frozen=True)
 class GameObject:
-    id: str; name: str; zone: str; reader: Reader|None=None; atmosphere_only: bool=False; atmosphere_id: str|None=None
+    id: str; name: str; zone: str; reader: Reader|None=None; atmosphere_only: bool=False; atmosphere_id: str|None=None; item_id: str|None=None
 @dataclass(frozen=True)
 class Exit:
     direction: str; to_room_id: str; gate: object|None=None

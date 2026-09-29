@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from delve.engine import Action, Engine
-from delve.pack import load_pack
+from delve.pack import _effect, load_pack
 from delve.state import DelveState
 
 SPEC = Path(__file__).parents[1] / 'docs' / 'DELVE_M1_SPEC.md'
@@ -25,7 +25,7 @@ def make_pack():
     for key in ('shove.success', 'shove.fail', 'throw.interrupt', 'throw.fizzle', 'intent.cancelled', 'hazard.trigger', 'enemy.hit', 'enemy.miss', 'attack.hit', 'attack.miss', 'brace.success', 'brace.wasted', 'combat.not_yet'):
         if key not in keys:
             d['bank']['entries'].append({'key': key, 'fact_slots': [], 'variants': [key], 'fallback': key})
-    d['rooms'][1]['zones'].append('hazard')
+    if 'hazard' not in d['rooms'][1]['zones']: d['rooms'][1]['zones'].append('hazard')
     d['enemies'][0]['intent_cycle'] = ['strike', 'rush', 'smash', 'grab', 'guard']
     d['enemies'][0]['intents'] = [
         {'id': t, 'type': t, 'telegraph_key': 'intent.captain.smash', 'target_zone': 'doorway',
@@ -82,13 +82,14 @@ class HazardTests(unittest.TestCase):
         before = self.s.rng_draws
         events = self.act('shove', 'captain')
         self.assertEqual(self.s.rng_draws-before, 0); self.assertEqual(foe['zone'], 'hazard'); self.assertEqual(foe['hp'], 12)
-        self.assertEqual([e.key for e in events if e.key in ('hazard.trigger','shove.success')], ['hazard.trigger','shove.success'])
+        self.assertEqual([e.key for e in events if e.key in ('hazard.collapse','shove.success')], ['hazard.collapse','shove.success'])
 
     def test_guard_shove_persists_and_unstable_ground_affects_actor(self):
         foe = self.s.enemies['captain']; foe['current_intent_id'] = 'guard'
         events = self.act('shove', 'captain')
         self.assertEqual([e.key for e in events], ['shove.fail']); self.assertEqual(foe['current_intent_id'], 'guard'); self.assertEqual(self.s.rng_draws, 0)
         d = copy.deepcopy(EXAMPLE); d['hazards'] = [{'id':'unstable_ground','room_id':'vault','zone':'hazard','tag':'unstable_ground','event_key':'hazard.collapse','trigger':{'action':'shove','requires_flag_id':'route_flag'},'effects':[{'type':'damage','target':'player','amount':2}]}]
+        d['rooms'][0]['objects'][0]['reader']['effects'].append({'type':'set_flag','flag_id':'route_flag','value':True})
         d['bank']['entries'].append({'key':'shove.fail','fact_slots':[],'variants':['fail'],'fallback':'fail'})
         guard = copy.deepcopy(d['enemies'][0]['intents'][0]); guard.update({'id':'guard','type':'guard'}); d['enemies'][0]['intents'].append(guard); d['enemies'][0]['intent_cycle']=['guard']
         pack = load_pack(d); s = DelveState.new(pack, 1, 'fighter'); s.room_id='vault'; s.player['zone']='doorway'; e=Engine(pack,s)
@@ -130,17 +131,75 @@ class HazardTests(unittest.TestCase):
         for tag, (effects, expected) in cases.items():
             with self.subTest(tag=tag):
                 d=copy.deepcopy(EXAMPLE); d['hazards']=[{'id':'tag_hazard','room_id':'vault','zone':'hazard','tag':tag,'event_key':'hazard.collapse','trigger':{'action':'shove','requires_flag_id':None},'effects':effects}]
-                pack=load_pack(d); s=DelveState.new(pack,7,'fighter'); s.room_id='vault'; s.player['zone']='doorway'; e=Engine(pack,s)
-                if tag in ('collapse','fire'): s.enemies['captain']['current_intent_id']='smash'
-                e._shove(e._living_enemy(), e._current_intent(e._living_enemy()), [])
+                if tag == 'fire':
+                    # Fire is an entry hazard, while other shove hazards use the shove seam.
+                    d['hazards'][0]['trigger']={'action':'move','requires_flag_id':None}
+                    d['hazards'][0]['effects']=[{'type':'damage','target':'player','amount':3}]
+                    pack=load_pack(d); s=DelveState.new(pack,7,'fighter'); e=Engine(pack,s)
+                    s.room_id='entry'; e.apply(Action('move',direction='east'))
+                    expected=('player_hp', 21)
+                else:
+                    pack=load_pack(d); s=DelveState.new(pack,7,'fighter'); s.room_id='vault'; s.player['zone']='doorway'; e=Engine(pack,s)
+                    if tag == 'collapse': s.enemies['captain']['current_intent_id']='smash'
+                    e._shove(e._living_enemy(), e._current_intent(e._living_enemy()), [])
+                    expected=expected
                 key,value=expected
-                actual=s.enemies['captain']['hp'] if key=='hp' else s.enemies['captain']['zone'] if key=='zone' else s.clocks['patrol']
+                actual=(s.player['hp'] if key=='player_hp' else s.enemies['captain']['hp'] if key=='hp'
+                        else s.enemies['captain']['zone'] if key=='zone' else s.clocks['patrol'])
                 self.assertEqual(actual,value)
         # Cover improves a brace outcome by one extra point, with a zero floor.
         d=copy.deepcopy(EXAMPLE); d['hazards']=[{'id':'cover_hazard','room_id':'vault','zone':'hazard','tag':'cover','event_key':'hazard.collapse','trigger':{'action':'shove','requires_flag_id':None},'effects':[]}]
         pack=load_pack(d); s=DelveState.new(pack,7,'fighter'); s.room_id='vault'; s.player['zone']='doorway'; s.rng=ScriptedRandom(0); e=Engine(pack,s); foe=e._living_enemy()
         e._resolve_intent(foe, 'halve', [])
         self.assertEqual(s.player['hp'], 23)
+
+    def test_open_exit_and_enemy_move_zone_effects_are_observable(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['rooms'][0]['exits'][0]['gate']={'kind':'flag','flag_id':'door_open','denial_event_key':'gate.closed'}
+        d['bank']['entries'].append({'key':'gate.closed','fact_slots':[],'variants':['Closed.'],'fallback':'Closed.'})
+        d['rooms'][0]['objects'][0]['reader']['effects'].append({'type':'open_exit','room_id':'entry','direction':'east'})
+        pack=load_pack(d); s=DelveState.new(pack,1,'fighter'); e=Engine(pack,s)
+        e.apply(Action('look','bell'))
+        self.assertEqual(e.apply(Action('move',direction='east'))[0].key,'room.enter')
+
+        d=copy.deepcopy(EXAMPLE)
+        d['enemies'][0]['intents'][0]['effects']=[{'type':'move_zone','actor':'enemy','zone':'far'}]
+        pack=load_pack(d); s=DelveState.new(pack,1,'fighter'); s.room_id='vault'; e=Engine(pack,s)
+        foe=e._living_enemy(); s.enemies[foe.id]['current_intent_id']=foe.intent_cycle[0]
+        e._resolve_intent(foe,events=[])
+        self.assertEqual(s.enemies[foe.id]['zone'],'far')
+
+    def test_each_effect_type_changes_state_or_emits_an_event(self):
+        cases=(
+            ('damage', {'type':'damage','target':'player','amount':2}, 'hp'),
+            ('heal', {'type':'heal','target':'player','amount':2}, 'hp'),
+            ('tick_clock', {'type':'tick_clock','clock_id':'patrol','amount':1}, 'clock'),
+            ('move_zone_player', {'type':'move_zone','actor':'player','zone':'far'}, 'player_zone'),
+            ('move_zone_enemy', {'type':'move_zone','actor':'enemy','zone':'far'}, 'enemy_zone'),
+            ('set_flag', {'type':'set_flag','flag_id':'effect_flag','value':True}, 'flag'),
+            ('reveal_clue', {'type':'reveal_clue','clue_id':'bell_silenced'}, 'clue'),
+            ('spawn_object', {'type':'spawn_object','room_id':'entry','object_id':'bell'}, 'objects'),
+            ('remove_object', {'type':'remove_object','room_id':'entry','object_id':'bell'}, 'objects'),
+            ('open_exit', {'type':'open_exit','room_id':'entry','direction':'east'}, 'flags'),
+            ('end_run', {'type':'end_run','state':'quit'}, 'terminal'),
+            ('interrupt_intent', {'type':'interrupt_intent'}, 'intent'),
+        )
+        for name,effect,projection in cases:
+            with self.subTest(effect=name):
+                state=DelveState.new(self.pack,2,'fighter'); state.room_id='vault'; engine=Engine(self.pack,state)
+                state.player['hp']=10
+                if projection=='objects' and name=='spawn_object': state.present_objects['entry'].remove('bell')
+                events=[]; engine._effects([_effect(effect,'$.effect')],events)
+                if projection=='hp': self.assertNotEqual(state.player['hp'],10)
+                elif projection=='clock': self.assertEqual(state.clocks['patrol'],1)
+                elif projection=='player_zone': self.assertEqual(state.player['zone'],'far')
+                elif projection=='enemy_zone': self.assertEqual(state.enemies['captain']['zone'],'far')
+                elif projection=='flag': self.assertIn('effect_flag',state.flags)
+                elif projection=='clue': self.assertIn('bell_silenced',state.known_clues)
+                elif projection=='objects': self.assertEqual('bell' in state.present_objects['entry'], name=='spawn_object')
+                elif projection=='flags': self.assertTrue(any(flag.startswith('__open_exit:') for flag in state.flags))
+                elif projection=='terminal': self.assertEqual(state.terminal,'quit')
+                elif projection=='intent': self.assertIsNone(state.enemies['captain']['current_intent_id'])
 
     def test_payoff_kill_checks_victory_and_random_is_private(self):
         self.s.flags.add('captain_route_known'); self.s.known_facts.append('captain_route')
@@ -156,7 +215,7 @@ class HazardTests(unittest.TestCase):
         self.s.enemies['captain']['current_intent_id'] = 'smash'
         events = self.act('shove', 'captain')
         keys = [event.key for event in events]
-        self.assertLess(keys.index('hazard.trigger'), keys.index('enemy.defeated'))
+        self.assertLess(keys.index('hazard.collapse'), keys.index('enemy.defeated'))
         self.assertLess(keys.index('enemy.defeated'), keys.index('terminal.victory'))
 
     def test_mixed_action_fuzz_never_raises(self):
@@ -174,10 +233,8 @@ class HazardTests(unittest.TestCase):
 
     def test_non_shove_hazard_trigger_does_not_fire(self):
         d=copy.deepcopy(EXAMPLE); d['hazards']=[{'id':'other_hazard','room_id':'vault','zone':'hazard','tag':'collapse','event_key':'hazard.collapse','trigger':{'action':'move','requires_flag_id':None},'effects':[{'type':'damage','target':'enemy','amount':9}]}]
-        d['enemies'][0]['intent_cycle']=['smash']
-        pack=load_pack(d); s=DelveState.new(pack,9,'fighter'); s.room_id='vault'; s.player['zone']='doorway'; e=Engine(pack,s)
-        events=e.apply(Action('shove','captain'))
-        self.assertEqual(s.enemies['captain']['hp'],18); self.assertNotIn('hazard.trigger',[x.key for x in events]); self.assertEqual(s.rng_draws,2)
+        with self.assertRaises(Exception) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_UNSUPPORTED_MECHANIC')
 
 
 if __name__ == '__main__': unittest.main()

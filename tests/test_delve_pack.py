@@ -1,13 +1,16 @@
 import copy
+import ast
 import json
 import re
+import random
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from dataclasses import FrozenInstanceError, replace
 
 from delve import PackError, load_pack, validate_pack
-from delve.pack import STRUCTURAL_KEYS, check_engine_ready, load_engine_ready_pack
+from delve.pack import ENGINE_SLOTS, STRUCTURAL_KEYS, check_engine_ready, load_engine_ready_pack
 from delve.commands import ParseProblem, parse_command
 from delve.state import DelveState
 
@@ -54,6 +57,133 @@ class PackTests(unittest.TestCase):
     def test_E_EFFECT_UNKNOWN(self): self._reject('E_EFFECT_UNKNOWN')
     def test_E_TERMINAL_UNREACHABLE(self): self._reject('E_TERMINAL_UNREACHABLE')
     def test_E_BANK_FALLBACK_MISSING(self): self._reject('E_BANK_FALLBACK_MISSING')
+
+    def test_named_missing_fallback_field_has_required_code(self):
+        d=copy.deepcopy(EXAMPLE)
+        next(e for e in d['bank']['entries'] if e['key']=='terminal.victory').pop('fallback')
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_BANK_FALLBACK_MISSING')
+
+    def test_hazard_trigger_fields_are_strictly_typed(self):
+        for value in (['bad'], {}, 1, True):
+            d=copy.deepcopy(EXAMPLE); d['hazards'][0]['trigger']['requires_flag_id']=value
+            with self.subTest(value=value), self.assertRaises(PackError): load_pack(d)
+        d=copy.deepcopy(EXAMPLE); d['hazards'][0]['trigger']['requires_flag_id']=None
+        self.assertIsNone(load_pack(d).hazards[0].trigger['requires_flag_id'])
+
+    def test_predicate_fields_reject_wrong_types_as_pack_errors(self):
+        for field,value in (('kind',['flag_set']),('flag_id',['bad'])):
+            d=copy.deepcopy(EXAMPLE); d['terminals'][0]['all']=[{'kind':'flag_set','flag_id':'never_set'}]
+            d['terminals'][0]['all'][0][field]=value
+            with self.subTest(field=field), self.assertRaises(PackError): load_pack(d)
+
+    def test_intent_and_threshold_effect_references_are_validated(self):
+        for where in ('intent','threshold'):
+            d=copy.deepcopy(EXAMPLE)
+            effect={'type':'tick_clock','clock_id':'missing_clock','amount':1}
+            if where=='intent': d['enemies'][0]['intents'][0]['effects'].append(effect)
+            else: d['clocks'][0]['thresholds'][0]['effects'].append(effect)
+            with self.subTest(where=where), self.assertRaises(PackError) as cm: load_pack(d)
+            self.assertEqual(cm.exception.code,'E_SCHEMA')
+
+    def test_engine_ready_rejects_unsupplied_bank_slots(self):
+        for key in ('intent.captain.smash','object.read','clue.bell','hazard.collapse','get.blocked'):
+            with self.subTest(key=key):
+                d=self._engine_ready_dict()
+                entry=next(e for e in d['bank']['entries'] if e['key']==key)
+                entry.update(fact_slots=['phantom'], variants=['{{phantom}}'], fallback='{{phantom}}')
+                with self.assertRaises(PackError) as cm: load_engine_ready_pack(d)
+                self.assertEqual(cm.exception.code,'E_BANK_SLOT_UNSUPPLIED')
+
+    def test_engine_ready_wrapper_rejects_missing_structural_key(self):
+        d=self._engine_ready_dict()
+        d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='move.blocked']
+        with self.assertRaises(PackError) as cm: load_engine_ready_pack(d)
+        self.assertEqual(cm.exception.code,'E_BANK_STRUCTURAL_MISSING')
+
+    def test_static_unreachable_victory_mutant_is_killed(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['terminals'][0]['all']=[{'kind':'room_is','room_id':'entry'}, {'kind':'room_is','room_id':'vault'}]
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_TERMINAL_UNREACHABLE')
+
+    def test_flag_predicates_and_unrevealed_clues_are_rejected(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['terminals'][0]['all']=[{'kind':'flag_set','flag_id':'never_set'}]
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_FLAG_UNSETTABLE')
+        d=copy.deepcopy(EXAMPLE)
+        d['rooms'][0]['objects'][2]['reader']['effects']=[]
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_CLUE_UNREVEALABLE')
+
+    def test_victory_end_run_is_rejected_in_nonterminal_effects(self):
+        for where in ('reader','hazard','intent','threshold'):
+            d=copy.deepcopy(EXAMPLE); effect={'type':'end_run','state':'victory'}
+            if where=='reader': d['rooms'][0]['objects'][0]['reader']['effects'].append(effect)
+            elif where=='hazard': d['hazards'][0]['effects'].append(effect)
+            elif where=='intent': d['enemies'][0]['intents'][0]['effects'].append(effect)
+            else: d['clocks'][0]['thresholds'][0]['effects'].append(effect)
+            with self.subTest(where=where):
+                with self.assertRaises(PackError) as cm: load_pack(d)
+                self.assertEqual(cm.exception.code,'E_UNSUPPORTED_MECHANIC')
+
+    def test_inert_fire_and_collapse_hazards_are_rejected(self):
+        for tag,effects in (('fire',[]),('collapse',[])):
+            d=copy.deepcopy(EXAMPLE); d['hazards'][0].update(tag=tag,effects=effects)
+            d['hazards'][0]['trigger']={'action':'move' if tag=='fire' else 'shove','requires_flag_id':None}
+            with self.subTest(tag=tag), self.assertRaises(PackError) as cm: load_pack(d)
+            self.assertEqual(cm.exception.code,'E_UNSUPPORTED_MECHANIC')
+
+    def test_engine_readiness_wrapper_is_the_terminal_loader(self):
+        from delve import __main__ as terminal
+        import contextlib
+        import io
+        d=self._engine_ready_dict()
+        d['bank']['entries']=[e for e in d['bank']['entries'] if e['key']!='move.blocked']
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'not_ready.json'; path.write_text(json.dumps(d),encoding='utf-8')
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output), patch('builtins.input',side_effect=AssertionError('terminal began play')):
+                code=terminal.main(['--pack',str(path),'--class','fighter'])
+            self.assertEqual(code,2)
+            self.assertIn('E_BANK_STRUCTURAL_MISSING',output.getvalue())
+
+    def test_shipped_pack_500_mutants_are_rejected_or_survive_random_sessions(self):
+        shipped=json.loads((Path(__file__).parents[1]/'delve'/'content'/'mossy_fast_slice.json').read_text())
+        rng=random.Random(17000)
+        mutations=('trigger_flag','effect_amount','reader_flag','hazard_tag','effect_type','enemy_zone',
+                   'room_zone','clock_threshold','bank_slots','flag_predicate','empty_cycle','description_type')
+        actions=('look','inventory','help','get','use','attack','shove','brace','throw','move','retreat','quit')
+        for index in range(500):
+            d=copy.deepcopy(shipped); choice=rng.choice(mutations)
+            invalid_value=rng.choice((['bad'], {'bad':1}, 7, True))
+            if choice=='trigger_flag': d['hazards'][0]['trigger']['requires_flag_id']=invalid_value
+            elif choice=='effect_amount': d['hazards'][0]['effects'][0]['amount']=invalid_value
+            elif choice=='reader_flag': d['rooms'][0]['objects'][0]['reader']['when_flag_id']=invalid_value
+            elif choice=='hazard_tag': d['hazards'][0]['tag']=invalid_value
+            elif choice=='effect_type': d['rooms'][0]['objects'][0]['reader']['effects'][0]['type']=invalid_value
+            elif choice=='enemy_zone': d['enemies'][0]['start_zone']=invalid_value
+            elif choice=='room_zone': d['rooms'][0]['zones']=['near', []]
+            elif choice=='clock_threshold': d['clocks'][0]['thresholds'][0]['at']=['bad']
+            elif choice=='bank_slots':
+                entry=next(e for e in d['bank']['entries'] if e['key']=='intent.goblin.strike')
+                entry.update(fact_slots=['phantom'],variants=['{{phantom}}'],fallback='{{phantom}}')
+            elif choice=='flag_predicate': d['terminals'][0]['all']=[{'kind':'flag_set','flag_id':['bad']}]
+            elif choice=='empty_cycle': d['enemies'][0]['intent_cycle']=[]
+            elif choice=='description_type': d['rooms'][0]['description_key']=[]
+            try: pack=load_engine_ready_pack(d)
+            except PackError: continue
+            from delve.engine import Action, Engine
+            from delve.state import DelveState
+            state=DelveState.new(pack,index,'fighter'); engine=Engine(pack,state); chooser=random.Random(9000+index)
+            try:
+                for _ in range(60):
+                    verb=chooser.choice(actions)
+                    engine.apply(Action(verb, target_id=chooser.choice(('brass_ring','goblin','missing','brass_ring_obj')),
+                                        direction=chooser.choice(('north','south','east','west'))))
+            except Exception as exc:
+                self.fail(f'mutant {index} ({choice}) accepted then crashed: {exc!r}')
     def test_E_ATMOSPHERE_UNREGISTERED(self): self._reject('E_ATMOSPHERE_UNREGISTERED')
     def test_E_FACT_CLUE_COUNT(self): self._reject('E_FACT_CLUE_COUNT')
     def test_E_ID_DUPLICATE(self): self._reject('E_ID_DUPLICATE')
@@ -212,6 +342,21 @@ class PackTests(unittest.TestCase):
             self.assertIn('terminal.'+suffix,STRUCTURAL_KEYS)
         self.assertNotIn('combat.not_yet', STRUCTURAL_KEYS)  # Amendment 4 item 8 retires this key.
         self.assertTrue({'enemy.defeated','target.ambiguous','parse.unknown_verb'} <= STRUCTURAL_KEYS.keys())
+        self.assertEqual(set(ENGINE_SLOTS),set(STRUCTURAL_KEYS))
+        self.assertEqual(ENGINE_SLOTS['intent.cancelled'],{'enemy_name'})
+        self.assertEqual(ENGINE_SLOTS['get.blocked'],{'enemy_name'})
+        self.assertEqual(ENGINE_SLOTS['item.get'],{'item_name'})
+        observed={}
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Attribute) or node.func.attr!='_event': continue
+            if not node.args or not isinstance(node.args[0],ast.Constant) or not isinstance(node.args[0].value,str): continue
+            key=node.args[0].value
+            if len(node.args)>1 and isinstance(node.args[1],ast.Dict):
+                observed.setdefault(key,set()).update(k.value for k in node.args[1].keys if isinstance(k,ast.Constant))
+            else: observed.setdefault(key,set())
+        for key,slots in observed.items():
+            self.assertIn(key,ENGINE_SLOTS,key)
+            self.assertTrue(slots.issubset(ENGINE_SLOTS[key]),(key,slots,ENGINE_SLOTS[key]))
 
 # Exercise semantic validation independently of the strict public loader.
 def load_unvalidated(d):

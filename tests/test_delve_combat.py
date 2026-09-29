@@ -292,10 +292,28 @@ class CombatTests(unittest.TestCase):
         event = self.act('retreat', direction='north')[0]
         after = self.s.snapshot()
         for snap in (before, after):
-            snap.pop('event_log', None); snap.pop('turn', None); snap.pop('canonical_state_hash', None)
+            snap.pop('event_log', None); snap.pop('canonical_state_hash', None)
         self.assertEqual(before, after)
         self.assertEqual(event.key, 'retreat.blocked')
         self.assertEqual(self.s.rng_draws, 0)
+
+    def test_invalid_combat_actions_preserve_turn_and_all_state(self):
+        cases=(
+            ('blocked move', Action('move',direction='west'), 'move.blocked', None),
+            ('unheld throw', Action('throw','not_held'), 'target.unknown', None),
+            ('retreat wrong zone', Action('retreat',direction='west'), 'retreat.blocked', 'near'),
+            ('retreat against grab', Action('retreat',direction='west'), 'retreat.blocked', 'doorway'),
+        )
+        for name,action,expected,zone in cases:
+            with self.subTest(name=name):
+                self.s.room_id='vault'; self.s.player['zone']=zone or 'doorway'
+                if name=='retreat against grab': self.s.enemies['captain']['current_intent_id']='grab'
+                else: self.s.enemies['captain']['current_intent_id']='strike'
+                before=self.s.snapshot(); events=self.e.apply(action); after=self.s.snapshot()
+                before.pop('event_log'); before.pop('canonical_state_hash')
+                after.pop('event_log'); after.pop('canonical_state_hash')
+                self.assertEqual(events[0].key,expected)
+                self.assertEqual(before,after)
 
     def test_deterministic_replay_and_global_random_untouched(self):
         actions = [Action('attack'), Action('brace'), Action('retreat', direction='west')]

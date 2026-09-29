@@ -63,7 +63,7 @@ class Engine:
             ex = next((x for x in self.rooms[s.room_id].exits if x.direction == direction), None)
             if ex is None:
                 return self._record([self._event('move.no_exit', {'direction': direction})])
-            if ex.gate and ex.gate.flag_id not in s.flags:
+            if ex.gate and ex.gate.flag_id not in s.flags and '__open_exit:' + s.room_id + ':' + direction not in s.flags:
                 return self._record([self._event(ex.gate.denial_event_key)])
             s.room_id = ex.to_room_id
             s.player['zone'] = 'doorway' if self._living_enemy() else 'near'
@@ -78,6 +78,7 @@ class Engine:
                 intent = next((i for i in enemy.intents if i.id == st['current_intent_id']), None)
                 if intent:
                     events.append(self._event(intent.telegraph_key, {'enemy_name':enemy.name}, typ='enemy_intent'))
+            self._entry_hazards(events)
             self._ticks('move', events)
         elif verb in ('look','x','examine'):
             if not action.target_id:
@@ -99,10 +100,11 @@ class Engine:
             s.terminal = 'quit'; events.append(self._event('terminal.quit'))
         elif verb in ('get','take','g'):
             events.extend(self._get(action.target_id))
+            valid = bool(events and events[0].key == 'item.get')
         elif verb in ('use','u'):
             held = action.target_id in s.inventory
             events.extend(self._use(action.target_id))
-            valid = held
+            valid = held and bool(events) and events[0].key != 'use.nothing'
             if valid and foe_at_start and intent_at_start:
                 self._finish_round(foe_at_start, intent_at_start, events)
         elif verb in ('attack','shove','brace','throw','retreat'):
@@ -150,6 +152,7 @@ class Engine:
                 events.append(self._event('target.unknown', {'target': 'enemy'})); valid=False
         else:
             events.append(self._event('target.unknown', {'target': action.target_id or verb}))
+            valid = False
         if valid:
             s.turn += 1
             self._terminal_check(events)
@@ -221,7 +224,7 @@ class Engine:
             self._failed_shove_hazard(events)
             return 'resolve'
         st['zone'] = 'hazard'
-        events.append(self._event('hazard.trigger'))
+        events.append(self._event(hazard.event_key))
         # Hazard damage is dealt to the enemy as a result of the player's shove. It is not
         # enemy-damage-on-player, so it is exempt from the telegraph-before-damage invariant.
         self._hazard_effects(hazard, enemy, events)
@@ -254,8 +257,6 @@ class Engine:
         st = self.state.enemies[enemy.id] if enemy else None
         if tag == 'drop' and st:
             st['zone'] = 'hazard'
-        elif tag == 'noise':
-            pass  # Declared tick_clock effects below carry the noise consequence.
         elif tag == 'unstable_ground' and player:
             self.state.player['zone'] = 'hazard'
         # cover's mechanical effect is applied in _resolve_intent when the player braces.
@@ -263,13 +264,25 @@ class Engine:
         if st:
             st['alive'] = st['hp'] > 0
 
+    def _entry_hazards(self, events):
+        for hazard in self.pack.hazards:
+            if hazard.room_id != self.state.room_id or hazard.tag != 'fire':
+                continue
+            if hazard.trigger.get('action') not in ('move', 'enter'):
+                continue
+            required = hazard.trigger.get('requires_flag_id')
+            if required and required not in self.state.flags:
+                continue
+            events.append(self._event(hazard.event_key))
+            self._hazard_effects(hazard, None, events, player=True)
+
     def _failed_shove_hazard(self, events):
         hazard = next((h for h in self.pack.hazards if h.room_id == self.state.room_id
                        and h.tag == 'unstable_ground'
                        and h.trigger.get('action') == 'shove'), None)
         if hazard:
             self.state.player['zone'] = 'hazard'
-            events.append(self._event('hazard.trigger'))
+            events.append(self._event(hazard.event_key))
             self._hazard_effects(hazard, None, events, player=True)
 
     def _resolve_intent(self, enemy, counter=None, events=None):
@@ -372,7 +385,9 @@ class Engine:
             elif e.type == 'tick_clock': self._tick(e.clock_id, e.amount, events)
             elif e.type == 'move_zone':
                 if e.actor == 'player': s.player['zone'] = e.zone
-                elif e.actor in s.enemies: s.enemies[e.actor]['zone'] = e.zone
+                elif e.actor == 'enemy':
+                    foe=self._living_enemy()
+                    if foe: s.enemies[foe.id]['zone'] = e.zone
             elif e.type == 'set_flag':
                 if e.value: s.flags.add(e.flag_id)
                 else: s.flags.discard(e.flag_id)
@@ -383,7 +398,7 @@ class Engine:
                 if e.object_id in s.present_objects[e.room_id]: s.present_objects[e.room_id].remove(e.object_id)
             elif e.type == 'open_exit':
                 s.flags.add('__open_exit:' + e.room_id + ':' + e.direction)
-            elif e.type == 'end_run': s.terminal = e.state
+            elif e.type == 'end_run' and e.state != 'victory': s.terminal = e.state
             elif e.type == 'interrupt_intent':
                 foe=self._living_enemy()
                 if foe: s.enemies[foe.id]['current_intent_id'] = None
@@ -422,7 +437,7 @@ class Engine:
             if terminal.kind in ('death','dead') and s.player['hp'] <= 0:
                 s.terminal='dead'
                 cause=getattr(self,'_last_death_cause','your wounds')
-                events.append(self._event('terminal.death', {
+                events.append(self._event(terminal.event_key, {
                     'cause': cause,
                     'cause_enemy': getattr(self, '_last_death_enemy', ''),
                     'cause_intent': getattr(self, '_last_death_intent', ''),
@@ -430,7 +445,7 @@ class Engine:
         for terminal in self.pack.terminals:
             if terminal.kind != 'victory': continue
             if all(self._predicate(p) for p in terminal.all):
-                s.terminal='victory'; events.append(self._event('terminal.victory')); return
+                s.terminal='victory'; events.append(self._event(terminal.event_key)); return
 
     def _predicate(self, p):
         s=self.state; k=p['kind']

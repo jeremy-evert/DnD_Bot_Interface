@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from playtest.harness import replay, snapshot
+import playtest.harness as harness
 
 
 class PlaytestHarnessTests(unittest.TestCase):
@@ -64,6 +65,29 @@ class PlaytestHarnessTests(unittest.TestCase):
         random.seed(5678)
         second = replay(29, calls).output
         self.assertEqual(first, second)
+
+    def test_replay_invokes_exported_game_main_with_defaults_and_memory_recorder(self):
+        original = harness.game_main.main
+        calls = []
+        random_factory = random.Random
+        rngs = []
+        def seeded_random(seed):
+            rng = random_factory(seed)
+            rngs.append((seed, rng))
+            return rng
+        def spy(**kwargs):
+            calls.append(kwargs)
+            return original(**kwargs)
+        with patch.object(harness.random, "Random", side_effect=seeded_random), \
+             patch.object(harness.game_main, "main", side_effect=spy):
+            replay(41, self.setup_calls("look"))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([seed for seed, _ in rngs], [41])
+        expected = random_factory(0)
+        expected.setstate(rngs[0][1].getstate())
+        self.assertEqual(calls[0]["roller"](1000000), expected.randint(1, 1000000))
+        self.assertIsInstance(calls[0]["narrator"], harness.PlainNarrator)
+        self.assertIsInstance(calls[0]["recorder"], harness.MemoryRecorder)
 
 
 if __name__ == "__main__":

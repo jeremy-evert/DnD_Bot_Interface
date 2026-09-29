@@ -123,4 +123,3 @@ def snapshot(witness: RealAdventure) -> dict:
     canonical = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     state["canonical_state_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return state
-

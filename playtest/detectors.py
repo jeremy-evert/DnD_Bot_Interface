@@ -35,6 +35,13 @@ def _add(out, mode, record, quote, rationale, severity):
         out.append(_instance(mode, [record["turn_id"]], quote, rationale, severity))
 
 
+class DetectorResults(list):
+    """List-compatible detector instances plus non-counted diagnostic notes."""
+    def __init__(self):
+        super().__init__()
+        self.notes = []
+
+
 def _shortest(rooms, start, goal):
     if start == goal:
         return 0
@@ -55,13 +62,33 @@ CONTRADICTION_RULES = [
     {"terms": ("hidden door",), "exit_target": "sanctum", "description": "hidden"},
 ]
 
-# Small wording-independent hints. These are cues, not a semantic model; longer
-# explanatory terminal text is also treated as cause/retry/carry-over content.
-DEATH_CONTENT_TERMS = (
-    "retry", "try", "again", "because", "killed by", "fell to", "cause",
-    "next time", "hint", "carry", "remember", "your fault", "struck by",
+# Closed, data-driven evidence cues. Positive examples: "killed by the captain",
+# "because you ignored the warning", "try again", and "carry the map onward".
+# These are phrases, not a length or prose-quality heuristic.
+DEATH_EVIDENCE_RULES = {
+    "cause": (
+        r"\bkilled by\b", r"\bstruck by\b", r"\bfell to\b", r"\bslain by\b",
+        r"\b(?:because|after|when) you\b", r"\b(?:trap|poison|wound) caused\b",
+    ),
+    "retry": (r"\bretry\b", r"\btry again\b", r"\bnext time\b",
+              r"\bstart over\b", r"\breturn to\b"),
+    "carry_over": (
+        r"\bcarry (?:the|your|this)\b", r"\b(?:map|clue|memory|lesson) (?:remains|stays|goes|travels)\b",
+        r"\bremember\b", r"\bkeep .{0,30} for next time\b",
+    ),
+}
+# Unknown prose is inconclusive. These explicit empty-terminal examples include
+# the long empty wording that exposed the former length heuristic.
+DEATH_EMPTY_TERMS = (
+    "you have fallen", "you die", "the adventure ends here", "the story ends",
+    "silence follows", "darkness fills the hall", "your journey stops here",
+    "the last light goes out", "your story ends",
 )
-DEATH_BOILERPLATE = ("you have fallen", "you die", "the adventure ends here")
+ACTIONABLE_INFORMATION_TERMS = (
+    "reveals", "you discover", "you learn", "you notice", "you find out",
+    "can be opened", "can open", "the way is", "the clue", "the warning",
+    "points toward", "marks a", "shows you", "remembered what",
+)
 
 
 DETECTORS_NOT_IMPLEMENTED_FOR_GAME = "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"
@@ -72,7 +99,7 @@ def run_all(records, journal=None, content=None, game_id="dnd_combat"):
         return {"status": "NOT_IMPLEMENTED", "marker": DETECTORS_NOT_IMPLEMENTED_FOR_GAME,
                 "instances": []}
     if game_id != "dnd_combat": raise ValueError("unsupported game_id")
-    out = []
+    out = DetectorResults()
     journal_rows = journal or []
     if isinstance(journal_rows, dict):
         journal_rows = list(journal_rows.values())
@@ -123,10 +150,23 @@ def run_all(records, journal=None, content=None, game_id="dnd_combat"):
             now = r["snapshot"].get("canonical_state_hash")
             resolution = (" rolls " in r["new_output"] or " attacks! Initiative" in r["new_output"]
                           or re.search(r"(?:'s|’s) turn\.\.\.", r["new_output"]))
-            if not refused and not resolution and prev and prev == now:
+            informative = any(term in r["new_output"].lower()
+                              for term in ACTIONABLE_INFORMATION_TERMS)
+            if not refused and not resolution and not informative and prev and prev == now:
                 _add(out, "NO_CONSEQUENCE_STALL", r, r["new_output"].strip(), "Apparently accepted non-query action left canonical state unchanged.", 4)
     grouped = defaultdict(list)
+    state_epoch = 0
+    previous_hash = object()
     for r in records:
+        current_hash = r.get("snapshot", {}).get("canonical_state_hash")
+        if not isinstance(current_hash, str) or not current_hash:
+            # Unknown state breaks the evidence chain; it cannot prove a stall-free interval.
+            state_epoch += 1
+            previous_hash = object()
+            continue
+        if current_hash != previous_hash:
+            state_epoch += 1
+            previous_hash = current_hash
         lines = []
         for line in r["new_output"].splitlines():
             if (not line.strip() or "Your turn." in line or " HP, AC " in line
@@ -138,10 +178,10 @@ def run_all(records, journal=None, content=None, game_id="dnd_combat"):
             lines.append(line.strip())
         response = " ".join(lines).lower()
         if response:
-            grouped[response].append(r)
-    for response, rows in grouped.items():
+            grouped[(state_epoch, response)].append(r)
+    for (state_epoch, response), rows in grouped.items():
         if len(rows) >= 3 and len({r["frame_id"] for r in rows}) >= 3:
-            out.append(_instance("REPEATED_RESPONSE", [r["turn_id"] for r in rows], rows[0]["new_output"].strip(), "Same normalized response repeats across three frames.", 3))
+            out.append(_instance("REPEATED_RESPONSE", [r["turn_id"] for r in rows], rows[0]["new_output"].strip(), "Same normalized response repeats across three frames without a material state change.", 3))
     decisions = [r for r in records if any(c.lower().strip() in {"attack", "a", "use", "u", "potion"} for c in r.get("input_calls", [])) and "Your turn." in r["new_output"]]
     attacks = sum(any(c.lower().strip() in {"attack", "a"} for c in r["input_calls"]) for r in decisions)
     if len(decisions) >= 5 and attacks / len(decisions) >= .9:
@@ -154,14 +194,16 @@ def run_all(records, journal=None, content=None, game_id="dnd_combat"):
         lines = r["new_output"].splitlines()
         combat_lines = [i for i, line in enumerate(lines) if " rolls " in line]
         terminal = "\n".join(lines[combat_lines[-1] + 1:] if combat_lines else lines).strip()
-        non_boilerplate = terminal.lower()
-        for phrase in DEATH_BOILERPLATE:
-            non_boilerplate = non_boilerplate.replace(phrase, " ")
-        non_boilerplate = " ".join(non_boilerplate.split())
-        has_content = (any(term in non_boilerplate.lower() for term in DEATH_CONTENT_TERMS)
-                       or len(non_boilerplate) >= 40)
-        if terminal and not has_content:
+        lowered = terminal.lower()
+        has_evidence = any(re.search(pattern, lowered, re.I)
+                           for patterns in DEATH_EVIDENCE_RULES.values() for pattern in patterns)
+        is_known_empty = any(term in lowered for term in DEATH_EMPTY_TERMS)
+        if terminal and is_known_empty and not has_evidence:
             _add(out, "FAIL_WITH_NOTHING", r, terminal, "Death message gives no cause, retry path, or carry-over.", 3)
+        elif terminal and not has_evidence and not is_known_empty:
+            out.notes.append({"mode": "INCONCLUSIVE", "turn_ids": [r["turn_id"]],
+                              "quote": terminal,
+                              "rationale": "Death wording matches neither cause/retry/carry-over evidence nor the explicit empty-terminal examples."})
     out.extend(probe_conventions())
     return out
 

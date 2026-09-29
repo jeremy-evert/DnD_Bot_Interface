@@ -44,8 +44,46 @@ class DetectorTests(unittest.TestCase):
     def test_repeated_response(self):
         self.assert_fires("REPEATED_RESPONSE", fixtures.repeated_response(), "That does nothing.")
 
+    def test_repeated_response_after_material_state_change_is_not_stall(self):
+        rows = fixtures.repeated_response_after_state_change_real_harness()
+        modes = {x["mode"] for x in run_all(rows)}
+        self.assertNotIn("REPEATED_RESPONSE", modes)
+
+    def test_repeated_response_requires_three_distinct_frames(self):
+        rows = fixtures.repeated_response()
+        for row in rows:
+            row["frame_id"] = 17
+        self.assertNotIn("REPEATED_RESPONSE", {x["mode"] for x in run_all(rows)})
+
+    def test_repeated_response_requires_known_canonical_state(self):
+        rows = fixtures.repeated_response()
+        for row in rows:
+            row["snapshot"].pop("canonical_state_hash")
+        self.assertNotIn("REPEATED_RESPONSE", {x["mode"] for x in run_all(rows)})
+
+    def test_informative_accepted_action_is_not_stall(self):
+        rows = fixtures.informative_action_real_harness()
+        modes = {x["mode"] for x in run_all(rows)}
+        self.assertIn("I can open a way west", rows[-1]["new_output"])
+        self.assertEqual(rows[-2]["snapshot"]["canonical_state_hash"],
+                         rows[-1]["snapshot"]["canonical_state_hash"])
+        self.assertNotIn("NO_CONSEQUENCE_STALL", modes)
+
+    def test_informative_look_is_not_stall(self):
+        rows = fixtures.informative_look_real_harness()
+        look = next(r for r in rows if r["input_calls"] == ["look"])
+        self.assertTrue(any(word in look["new_output"].lower()
+                            for word in ("exits:", "you see:", "portrait")))
+        self.assertNotIn("NO_CONSEQUENCE_STALL", {x["mode"] for x in run_all(rows)})
+
     def test_no_consequence_stall(self):
         self.assert_fires("NO_CONSEQUENCE_STALL", fixtures.no_consequence_stall(), "You wait.")
+        state = {"room_id": "entry", "canonical_state_hash": "same"}
+        refused_rows = fixtures._records(
+            ["Ready.", "Choose move, look, status, take, use, or talk."],
+            [[], ["nonsense"]], [state, state])
+        refused = run_all(refused_rows)
+        self.assertNotIn("NO_CONSEQUENCE_STALL", {x["mode"] for x in refused})
 
     def test_hollow_consequence(self):
         self.assert_fires("HOLLOW_CONSEQUENCE", fixtures.hollow_consequence(), "Mira opens the hidden door west.")
@@ -83,10 +121,66 @@ class DetectorTests(unittest.TestCase):
             self.assertIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(rows)})
         for wording in ("The captain killed you because you ignored the warning.",
                         "Fall here, then try again next time with a shield.",
-                        "Your friends carry the map onward after you fall.",
+                        "Your friends carry the map onward beyond the gates.",
                         "The campaign ends before you can learn what waited beyond the sealed gate."):
             rows = fixtures.death_wording_real_harness(wording)
             self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(rows)})
+
+    def test_long_empty_death_fires_and_unknown_death_is_inconclusive(self):
+        empty = fixtures.death_wording_real_harness(
+            "The story ends. Silence follows. Darkness fills the hall.")
+        self.assertIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(empty)})
+        informative = (
+            "The captain was killed by a trap.",
+            "The adventure ends here. Try again with a shield.",
+            "Your friends carry the map onward beyond the gates.",
+        )
+        for wording in informative:
+            with self.subTest(wording=wording):
+                clean = fixtures.death_wording_real_harness(wording)
+                results = run_all(clean)
+                self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in results})
+                self.assertFalse(results.notes, wording)
+        unknown = run_all(fixtures.death_wording_real_harness(
+            "A blue moth circles the seventh arch before dawn."))
+        self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in unknown})
+        self.assertTrue(any(note["mode"] == "INCONCLUSIVE" for note in unknown.notes))
+
+    def test_real_harness_provenance_table_executes_every_twin(self):
+        expected = {"repeated_response_real_harness", "no_consequence_stall_real_harness",
+                    "hollow_consequence_real_harness", "world_state_contradiction_real_harness",
+                    "death_wording_real_harness_twin"}
+        self.assertEqual({twin for _, twin, _ in fixtures.REAL_HARNESS_PROVENANCE}, expected)
+        evidence = {}
+        for label, twin_name, mode in fixtures.REAL_HARNESS_PROVENANCE:
+            with self.subTest(twin=label):
+                rows = getattr(fixtures, twin_name)()
+                self.assertTrue(rows)
+                self.assertTrue(all("canonical_state_hash" in r["snapshot"] for r in rows))
+                self.assertIn(mode, {item["mode"] for item in run_all(rows)})
+                evidence[label] = rows
+        repeated = evidence["repeated response"][-3:]
+        self.assertEqual([r["snapshot"]["room_id"] for r in repeated], ["gallery"] * 3)
+        self.assertEqual(len({r["snapshot"]["canonical_state_hash"] for r in repeated}), 1)
+        stall = evidence["no-consequence action"][-2:]
+        self.assertEqual([r["snapshot"]["room_id"] for r in stall], ["gallery"] * 2)
+        self.assertTrue(stall[0]["snapshot"]["vault_opened"])
+        self.assertIn("remains open", stall[-1]["new_output"])
+        self.assertEqual(stall[0]["snapshot"]["canonical_state_hash"],
+                         stall[1]["snapshot"]["canonical_state_hash"])
+        self.assertIn("goblin's brass ring", evidence["hollow consequence"][-1]["snapshot"]["inventory"])
+        before, after = evidence["hollow consequence"][-2:]
+        self.assertEqual(before["snapshot"]["room_id"], "gallery")
+        self.assertFalse(before["snapshot"]["vault_opened"])
+        self.assertEqual(after["snapshot"]["room_id"], "gallery")
+        self.assertTrue(after["snapshot"]["vault_opened"])
+        self.assertEqual(after["snapshot"]["rooms"]["gallery"]["exits"]["west"], "sanctum")
+        contradiction = evidence["world-state contradiction"][-1]["snapshot"]
+        self.assertEqual(contradiction["room_id"], "shrine")
+        self.assertEqual(contradiction["rooms"]["shrine"]["exits"]["east"], "sanctum")
+        death = evidence["death wording"][-1]
+        self.assertEqual(death["snapshot"]["game_state"], "dead")
+        self.assertIn("You have fallen. The adventure ends here.", death["new_output"])
 
     def test_death_terminal_message_follows_last_combat_resolution(self):
         rows = fixtures.death_wording(

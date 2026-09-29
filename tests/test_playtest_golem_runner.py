@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from playtest.golem_prompt import build_prompt
 from playtest.golem_runner import audit_commands, run_golem, validate_journal, _playctl_source
+from playtest.schema import load_manifest, load_run_receipt
 from playtest.transcript import verify_chain
 
 
@@ -37,7 +38,8 @@ class GolemRunnerTests(unittest.TestCase):
         type(self).runs += 1
         session, run = self.base / f"session-{self.runs}", self.base / f"run-{self.runs}"
         receipt = run_golem(session, run, golem_cmd=self.fake(body, emit_event=emit_event), turn_cap=cap,
-                            timeout=timeout, event_log=event_log)
+                            timeout=timeout, event_log=event_log, persona_prompt_text="test public persona",
+                            is_holdout=False)
         return session, run, receipt
 
     def test_real_playctl_frames_chain_and_journal(self):
@@ -48,10 +50,19 @@ class GolemRunnerTests(unittest.TestCase):
             for n, frame in enumerate(frames):
                 call("./playctl step " + shlex.quote(json.dumps(frame)))
                 call("./playctl journal " + shlex.quote(json.dumps({"turn_id": n+1, "wanted":"advance", "surprise":"", "continue":1, "reason":"testing", "unsupported_intent":None})))
-            ''' )
+            ''' , cap=7)  # Contract lifecycle clause: cap is the valid controller-owned stop.
         rows = verify_chain(session / "transcript.jsonl")
         self.assertGreater(len(rows), 5)
-        self.assertEqual(receipt["outcome"], "COMPLETE")
+        self.assertEqual(receipt["run_outcome"], "COMPLETE")
+        # Annabelle v2 receipt clauses: source digests and provenance revisions have distinct fields.
+        manifest = load_manifest(session / "manifest.json")
+        validated_receipt = load_run_receipt(run / "run_receipt.json")
+        self.assertEqual(receipt["game_sha"], manifest["game_sha"])
+        self.assertEqual(receipt["harness_sha"], manifest["harness_sha"])
+        self.assertIn("game_revision", manifest)
+        self.assertIn("harness_revision", manifest)
+        self.assertEqual(receipt["transcript_record_count"], receipt["turns"] + 1)
+        self.assertEqual(validated_receipt["run_id"], manifest["run_id"])
         self.assertEqual(len((run / "capsule/journal.jsonl").read_text().splitlines()), 7)
         self.assertTrue(all(json.loads(line)["continue"] == 1 for line in (run / "capsule/journal.jsonl").read_text().splitlines()))
 
@@ -62,16 +73,17 @@ class GolemRunnerTests(unittest.TestCase):
         events = self.base / "events.jsonl"
         events.write_text(json.dumps(hit[0]) + "\n")
         _, _, receipt = self.run_fake("pass\n", event_log=events)
-        self.assertEqual(receipt["outcome"], "BLINDNESS_VIOLATED")
+        self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
 
     def test_capsule_is_minimal_and_cannot_be_under_repo_or_session(self):
         session, run, _ = self.run_fake("pass\n")
         self.assertEqual(sorted(p.name for p in (run / "capsule").iterdir()),
                          ["CLOSED", "inbox", "journal.jsonl", "outbox", "playctl"])
         with self.assertRaises(ValueError):
-            run_golem(session, Path(__file__).resolve().parents[1] / "bad-capsule", golem_cmd=["false"])
+            run_golem(session, Path(__file__).resolve().parents[1] / "bad-capsule", golem_cmd=["false"],
+                      persona_prompt_text="test", is_holdout=False)
         with self.assertRaises(ValueError):
-            run_golem(session, session / "inside", golem_cmd=["false"])
+            run_golem(session, session / "inside", golem_cmd=["false"], persona_prompt_text="test", is_holdout=False)
 
     def test_capsule_and_launcher_are_owner_only(self):
         body = '''
@@ -182,8 +194,8 @@ class GolemRunnerTests(unittest.TestCase):
                 _, _, receipt = self.run_fake("pass\n")
         finally:
             source.write_bytes(original)
-        self.assertNotEqual(receipt["game_manifest_start"], receipt["game_manifest_end"])
-        self.assertEqual(receipt["outcome"], "GAME_MODIFIED_DURING_RUN")
+        self.assertNotEqual(receipt["game_files_start"], receipt["game_files_end"])
+        self.assertEqual(receipt["run_outcome"], "GAME_MODIFIED_DURING_RUN")
 
     def test_cap_and_stall_are_controller_terminations(self):
         _, _, capped = self.run_fake('''
@@ -191,19 +203,29 @@ class GolemRunnerTests(unittest.TestCase):
             for n in range(5):
                 subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
             ''', cap=2)
-        self.assertEqual(capped["termination"], "cap")
+        # Contract distinguishes the stop policy from actual game termination.
+        self.assertEqual(capped["stop_reason"], "cap")
         _, _, stalled = self.run_fake('''
             import json, shlex, subprocess
             for n in range(4):
                 subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True)
             ''')
-        self.assertEqual(stalled["termination"], "stalled")
+        self.assertEqual(stalled["stop_reason"], "no_progress")
 
     def test_timeout_kills_golem_and_leaves_verifiable_transcript(self):
         session, run, receipt = self.run_fake("import time\ntime.sleep(10)\n", timeout=.1)
-        self.assertEqual(receipt["outcome"], "INCOMPLETE_DISPATCH")
+        self.assertEqual(receipt["run_outcome"], "INCOMPLETE_DISPATCH")
         self.assertTrue(receipt["timeout"])
         self.assertTrue(verify_chain(session / "transcript.jsonl"))
+
+    def test_unexpected_nonzero_exit_and_injected_missing_audit_are_ineligible(self):
+        _, _, failed = self.run_fake("raise SystemExit(7)\n")
+        self.assertEqual(failed["run_outcome"], "INCOMPLETE_DISPATCH")
+        self.assertNotEqual(failed["stop_reason"], "cap")
+        missing = self.base / "not-created-events.jsonl"
+        _, _, unaudited = self.run_fake("pass\n", event_log=missing)
+        # Contract clause: injected audit sources use the same presence/recognized-event checks.
+        self.assertEqual(unaudited["run_outcome"], "AUDIT_UNVERIFIABLE")
 
     def test_forged_capsule_transcript_does_not_change_canonical_chain(self):
         body = '''
@@ -260,11 +282,18 @@ class GolemRunnerTests(unittest.TestCase):
             import json
             print(json.dumps({"type":"tool_call","payload":{"item":{"text":"cat /secret/DnD_Bot_Interface/dnd_combat/adventure.py"}}}))
             ''', emit_event=False)
-        self.assertEqual(forbidden["outcome"], "BLINDNESS_VIOLATED")
-        _, _, clean = self.run_fake("pass\n")
-        self.assertEqual(clean["outcome"], "COMPLETE")
+        self.assertEqual(forbidden["run_outcome"], "BLINDNESS_VIOLATED")
+        # Contract lifecycle clause: COMPLETE requires an in-order journal record per action.
+        _, _, clean = self.run_fake('''
+            import json, shlex, subprocess
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True)
+            note = {"turn_id":1,"wanted":"look","surprise":"","continue":1,"reason":"testing","unsupported_intent":None}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            ''', cap=1)
+        self.assertEqual(clean["run_outcome"], "COMPLETE")
+        # Contract clause: empty default and injected audit sources are unverifiable.
         _, _, empty = self.run_fake("pass\n", emit_event=False)
-        self.assertEqual(empty["outcome"], "AUDIT_UNVERIFIABLE")
+        self.assertEqual(empty["run_outcome"], "AUDIT_UNVERIFIABLE")
         self.assertEqual(empty["audit_events_seen"], 0)
 
     def test_playctl_works_from_a_different_cwd(self):
@@ -279,7 +308,8 @@ class GolemRunnerTests(unittest.TestCase):
         persona_file = self.base / "sealed.txt"
         persona_file.write_text("sealed operator wording")
         session, run = self.base / "sealed_session", self.base / "sealed_run"
-        receipt = run_golem(session, run, persona_text="sealed operator wording", golem_cmd=self.fake("pass\n"))
+        receipt = run_golem(session, run, persona_text="sealed operator wording", is_holdout=False,
+                            golem_cmd=self.fake("pass\n"))
         self.assertNotIn("sealed operator wording", (run / "run_receipt.json").read_text())
         self.assertEqual(receipt["prompt_sha256"], hashlib.sha256((run / "prompt.txt").read_bytes()).hexdigest())
 

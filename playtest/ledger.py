@@ -14,10 +14,17 @@ import json
 import os
 from pathlib import Path
 
-from .transcript import ZERO_HASH, canonical_json
+from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY_VERSION, canonical_json, catalog_digest,
+                     normalize_instance, strict_json_loads, validate_ledger_entry)
+from .transcript import ZERO_HASH
 
-LEDGER_VERSION = 1
-RUN_OUTCOMES = {"COMPLETE", "INCOMPLETE_DISPATCH", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE", "ERROR"}
+LEDGER_VERSION = 2
+RUN_OUTCOMES = {"COMPLETE", "INCOMPLETE_DISPATCH", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE", "GAME_MODIFIED_DURING_RUN", "ERROR"}
+
+
+class LegacyLedgerRecords(list):
+    legacy = True
+    eligible = False
 
 
 def _entry_hash(entry):
@@ -36,7 +43,7 @@ def head_hash(path):
 
 def verify_ledger(path, expected_head=None):
     path = Path(path)
-    entries, previous = [], ZERO_HASH
+    entries, previous, legacy = [], ZERO_HASH, False
     if not path.exists():
         raise ValueError("ledger is missing")
     with path.open("r", encoding="utf-8", newline="") as source:
@@ -44,84 +51,121 @@ def verify_ledger(path, expected_head=None):
             if not line.endswith("\n"):
                 raise ValueError(f"ledger line {number} is incomplete")
             try:
-                entry = json.loads(line)
-            except json.JSONDecodeError as exc:
+                entry = strict_json_loads(line)
+            except (json.JSONDecodeError, ValueError) as exc:
                 raise ValueError(f"invalid ledger line {number}") from exc
             if canonical_json(entry) + "\n" != line:
                 raise ValueError(f"noncanonical ledger line {number}")
+            if entry.get("schema_version") == 2:
+                validate_ledger_entry({key: value for key, value in entry.items() if key not in {"prev_hash", "entry_hash"}})
+            else:
+                legacy = True
             if entry.get("prev_hash") != previous or entry.get("entry_hash") != _entry_hash(entry):
                 raise ValueError(f"ledger chain mismatch at line {number}")
             previous = entry["entry_hash"]
             entries.append(entry)
     anchor_path = path.with_name(path.name + ".head")
     try:
-        anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        anchor = strict_json_loads(anchor_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("ledger head anchor is missing or invalid") from exc
     if anchor != {"record_count": len(entries), "chain_hash": previous}:
         raise ValueError("ledger head anchor mismatch (ledger may be truncated or altered)")
     if expected_head is not None and expected_head != previous:
         raise ValueError("ledger expected head mismatch")
-    return entries
+    return LegacyLedgerRecords(entries) if legacy else entries
 
 
 def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, seed,
-               is_holdout=False, holdout_prompt_sha256=None, narrator_policy="plain", turn_cap=35,
-               golem_model=None, golem_effort=None, judge_version=None, judge_model=None,
-               judge_effort=None, transcript_head_chain_hash=None, run_outcome="COMPLETE",
-               termination=None, turns=0, instances=(), judge_instances=(), curiosity=None,
-               coverage=None, discarded_judge_claims=0, unsupported_intents=(),
-               eligibility_flags=None, **extra):
-    """Build an entry from verified facts. Holdout prompt content is never accepted/stored."""
-    if run_outcome not in RUN_OUTCOMES:
-        raise ValueError("invalid run_outcome")
-    if type(is_holdout) is not bool:
-        raise ValueError("is_holdout must be bool")
-    if is_holdout and holdout_prompt_sha256 is not None and (len(holdout_prompt_sha256) != 64 or any(c not in "0123456789abcdef" for c in holdout_prompt_sha256)):
-        raise ValueError("holdout_prompt_sha256 must be a lowercase SHA-256 digest or null")
-    counts = {"detector": {}, "judge": {}}
-    weighted = {"detector": {}, "judge": {}}
-    for source, values in (("detector", instances), ("judge", judge_instances)):
-        for item in values:
-            if not item.get("verified", source == "detector"):
-                continue
-            mode = item["mode"]
-            counts[source][mode] = counts[source].get(mode, 0) + 1
-            weighted[source][mode] = weighted[source].get(mode, 0) + int(item.get("severity", 0))
+               session_id, manifest_sha256, run_receipt_sha256, journal_sha256,
+               transcript_head_chain_hash, persona_prompt_sha256, content_catalog,
+               is_holdout=False, holdout_prompt_sha256=None, narrator_policy="plain",
+               turn_policy="action_frames_v1", turn_cap=35,
+               severity_taxonomy_version=SEVERITY_TAXONOMY_VERSION,
+               measurement_policy="detector_only", golem_model=None, golem_effort=None,
+               judge_version=None, verifier_version=None, judge_model=None, judge_effort=None,
+               game_revision=None, harness_revision=None, judge_receipt_sha256=None,
+               judge_status=None, termination=None, run_outcome="COMPLETE", turns=0,
+               transcript_record_count=None, verified_instances=(), curiosity=None,
+               coverage=None, discarded_judge_claims=None, eligibility_flags=None,
+               expected_content_change=None):
+    """Build from already validated and normalized artifact facts only."""
+    if run_outcome not in RUN_OUTCOMES: raise ValueError("invalid run_outcome")
+    if type(is_holdout) is not bool: raise ValueError("is_holdout must be bool")
+    if is_holdout and holdout_prompt_sha256 != persona_prompt_sha256: raise ValueError("holdout prompt identity mismatch")
+    if not is_holdout and holdout_prompt_sha256 is not None: raise ValueError("public run must have null holdout identity")
+    digest_values = {"game_sha": game_sha, "harness_sha": harness_sha,
+        "manifest_sha256": manifest_sha256, "run_receipt_sha256": run_receipt_sha256,
+        "journal_sha256": journal_sha256, "transcript_head_chain_hash": transcript_head_chain_hash,
+        "persona_prompt_sha256": persona_prompt_sha256}
+    for label, value in digest_values.items():
+        if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+    if type(seed) is not int: raise ValueError("seed must be an integer")
+    if type(turns) is not int or turns < 0: raise ValueError("turns must be nonnegative action frames")
+    normalized = list(verified_instances)
+    for item in normalized:
+        from .schema import validate_verified_instance
+        validate_verified_instance(item)
+    if judge_status is None:
+        judge_status = "NOT_REQUESTED" if measurement_policy == "detector_only" else "INCOMPLETE"
+    if judge_status not in {"NOT_REQUESTED", "COMPLETE", "INCOMPLETE", "INVALID"}:
+        raise ValueError("invalid judge_status")
+    counts = {"detector": {}, "judge": None if judge_status == "NOT_REQUESTED" else {}}
+    weighted = {"detector": {}, "judge": None if counts["judge"] is None else {}}
+    for item in normalized:
+        source, mode, severity = item["source"], item["mode"], item["severity"]
+        if counts[source] is None: raise ValueError("judge instance present when judge was not requested")
+        counts[source][mode] = counts[source].get(mode, 0) + 1
+        weighted[source][mode] = weighted[source].get(mode, 0) + severity
     cov = dict(coverage or {})
     facts = dict(eligibility_flags or {})
-    eligible = run_outcome == "COMPLETE"
-    reason = None if eligible else "RUN_OUTCOME_" + run_outcome
-    if facts.get("comparison_eligible") is False:
-        eligible, reason = False, facts.get("reason_code") or "INELIGIBLE"
+    identity_present = all((run_id, session_id, game_sha, harness_sha, persona_id,
+        persona_prompt_sha256, seed is not None, turn_cap, narrator_policy, turn_policy,
+        measurement_policy, detector_version))
+    eligible = run_outcome == "COMPLETE" and turns > 0 and identity_present and judge_status in {"NOT_REQUESTED", "COMPLETE"}
+    reason = None if eligible else ("RUN_OUTCOME_" + run_outcome if run_outcome != "COMPLETE" else
+        "ZERO_ACTION_TURNS" if turns == 0 else "MISSING_PAIR_IDENTITY" if not identity_present else
+        "JUDGE_" + judge_status if judge_status not in {"NOT_REQUESTED", "COMPLETE"} else "INELIGIBLE")
+    if facts.get("comparison_eligible") is False: eligible, reason = False, facts.get("reason_code") or "INELIGIBLE"
     facts.update(comparison_eligible=eligible, reason_code=reason)
-    return {"ledger_version": LEDGER_VERSION, "run_id": run_id, "game_sha": game_sha,
-            "harness_sha": harness_sha, "detector_version": detector_version,
-            "judge_version": judge_version, "persona_id": persona_id, "seed": seed,
-            "is_holdout": is_holdout,
-            "holdout_prompt_sha256": holdout_prompt_sha256 if is_holdout else None,
-            "narrator_policy": narrator_policy, "turn_cap": turn_cap,
-            "golem": {"model": golem_model, "effort": golem_effort},
-            "judge": {"model": judge_model, "effort": judge_effort},
-            "transcript_head_chain_hash": transcript_head_chain_hash,
-            "run_outcome": run_outcome, "termination": termination, "turns": turns,
-            "per_mode_verified_instances": counts, "severity_weighted_counts": weighted,
-            "curiosity": dict(curiosity or {}),
-            "content_inventory": dict(extra.get("content_inventory") or {}),
-            "expected_content_change": extra.get("expected_content_change"),
-            "coverage": {"rooms_visited": int(cov.get("rooms_visited", 0)),
-                         "objects_touched": int(cov.get("objects_touched", cov.get("distinct_object_names_touched", 0))),
-                         "encounters_faced": int(cov.get("encounters_faced", 0))},
-            "discarded_judge_claims": int(discarded_judge_claims),
-            "unsupported_intents": list(unsupported_intents), "eligibility": facts}
-
+    if content_catalog is None: raise ValueError("content catalog is required")
+    entry = {"schema_version": SCHEMA_VERSION, "run_id": run_id, "session_id": session_id,
+        "manifest_sha256": manifest_sha256, "run_receipt_sha256": run_receipt_sha256,
+        "transcript_head_chain_hash": transcript_head_chain_hash, "journal_sha256": journal_sha256,
+        "game_revision": game_revision, "harness_revision": harness_revision,
+        "game_sha": game_sha, "harness_sha": harness_sha,
+        "persona_id": persona_id, "persona_prompt_sha256": persona_prompt_sha256,
+        "seed": seed, "is_holdout": is_holdout, "holdout_prompt_sha256": holdout_prompt_sha256,
+        "narrator_policy": narrator_policy, "turn_policy": turn_policy, "turn_cap": turn_cap,
+        "measurement_policy": measurement_policy, "severity_taxonomy_version": severity_taxonomy_version,
+        "detector_version": detector_version,
+        "turns": turns, "transcript_record_count": transcript_record_count if transcript_record_count is not None else turns + 1,
+        "termination": termination, "run_outcome": run_outcome,
+        "golem": {"model": golem_model, "effort": golem_effort},
+        "judge_receipt_sha256": judge_receipt_sha256, "judge_status": judge_status,
+        "judge_version": judge_version, "verifier_version": verifier_version,
+        "judge_model": judge_model, "judge_effort": judge_effort,
+        "judge_counted_instances": sum(item["source"] == "judge" for item in normalized) if judge_status == "COMPLETE" else None,
+        "discarded_judge_claims": discarded_judge_claims if judge_status != "NOT_REQUESTED" else None,
+        "per_mode_verified_instances": counts, "severity_weighted_counts": weighted,
+        "verified_instances": normalized, "content_catalog": content_catalog,
+        "catalog_sha256": catalog_digest(content_catalog),
+        "coverage": {"rooms_visited": int(cov.get("rooms_visited", 0)),
+                     "objects_touched": int(cov.get("objects_touched", 0)), "encounters_faced": int(cov.get("encounters_faced", 0))},
+        "curiosity": dict(curiosity or {}), "expected_content_change": expected_content_change,
+        "eligibility": facts}
+    validate_ledger_entry(entry)
+    return entry
 
 def append_entry(path, entry):
     path = Path(path)
     if not path.exists() and path.with_name(path.name + ".head").exists():
         raise ValueError("ledger data is missing while its head anchor exists")
     entries = verify_ledger(path) if path.exists() else []
+    if getattr(entries, "legacy", False): raise ValueError("cannot append v2 entries to a legacy ledger chain")
     previous = entries[-1]["entry_hash"] if entries else ZERO_HASH
+    validate_ledger_entry(entry)
     stored = dict(entry, prev_hash=previous, entry_hash="0" * 64)
     stored["entry_hash"] = _entry_hash(stored)
     path.parent.mkdir(parents=True, exist_ok=True)

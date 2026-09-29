@@ -34,7 +34,8 @@ class PlaytestTranscriptTests(unittest.TestCase):
     def new(self, folder="a", seed=41, name="Ada", character="fighter"):
         session = self.base / folder
         result = self.cli("new", "--seed", seed, "--name", name, "--class", character,
-                          "--persona", "test", "--session", session)
+                          "--persona", "test", "--persona-prompt", "test persona wording",
+                          "--is-holdout", "false", "--session-id", session.name, "--session", session)
         self.assertEqual(result.returncode, 0, result.stderr)
         return session
 
@@ -111,17 +112,19 @@ class PlaytestTranscriptTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 3)
         self.assertEqual((session / "transcript.jsonl").read_bytes(), before)
 
-    def test_identical_sessions_have_identical_chains_different_seeds_differ(self):
+    def test_identical_replays_match_but_dispatch_bound_chains_may_differ(self):
         one = self.new("one", seed=41)
         two = self.new("two", seed=41)
         three = self.new("three", seed=42)
         for session in (one, two, three):
             self.assertEqual(self.step(session, ["look"]).returncode, 0)
             self.assertEqual(self.step(session, ["status"]).returncode, 0)
-        hashes = [[row["chain_hash"] for row in load_transcript(path / "transcript.jsonl")]
-                  for path in (one, two, three)]
-        self.assertEqual(hashes[0], hashes[1])
-        self.assertNotEqual(hashes[0], hashes[2])
+        records = [load_transcript(path / "transcript.jsonl") for path in (one, two, three)]
+        # Contract clause: distinct dispatch IDs need not reproduce identical chain hashes.
+        self.assertEqual([r["new_output"] for r in records[0]], [r["new_output"] for r in records[1]])
+        self.assertEqual([r["snapshot"] for r in records[0]], [r["snapshot"] for r in records[1]])
+        self.assertNotEqual(records[0][0]["run_id"], records[1][0]["run_id"])
+        self.assertNotEqual([r["chain_hash"] for r in records[0]], [r["chain_hash"] for r in records[1]])
 
 
 if __name__ == "__main__":

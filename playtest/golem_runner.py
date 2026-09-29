@@ -16,6 +16,8 @@ import time
 from . import harness
 from .golem_prompt import build_prompt
 from .play import main as play_main
+from .schema import (SCHEMA_VERSION, canonical_json, git_revision, source_manifest,
+                     strict_json_loads, validate_run_receipt)
 from .transcript import load_transcript
 
 SANDBOX_POLICY = "workspace-write; capsule-only cwd; read access is not restricted and is audited"
@@ -133,16 +135,8 @@ def _game_manifest():
     storage together can rewrite this evidence too.
     """
     root = Path(__file__).resolve().parent.parent
-    files = sorted(path for directory in (root / "dnd_combat", root / "playtest")
-                   for path in directory.rglob("*.py") if path.is_file())
-    manifest = []
-    digest = hashlib.sha256()
-    for path in files:
-        relative = path.relative_to(root).as_posix()
-        content = path.read_bytes()
-        digest.update(relative.encode("utf-8") + b"\0" + content + b"\0")
-        manifest.append({"path": relative, "sha256": _sha(content)})
-    return {"sha256": digest.hexdigest(), "files": manifest}
+    return {"game": source_manifest(root, "game"),
+            "harness": source_manifest(root, "harness")}
 
 
 def _run_play(args):
@@ -225,171 +219,178 @@ if __name__ == "__main__": raise SystemExit(main())
 
 
 def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
-              effort="medium", prompt_path=None, persona_text=None, golem_cmd=None,
-              seed=41, name="Ada", character="fighter", turn_cap=35,
-              timeout=1800, retry_count=0, event_log=None):
-    """Create a canonical session and dispatch a player through an isolated file capsule."""
+              effort="medium", prompt_path=None, persona_text=None, persona_prompt_text=None,
+              is_holdout=None, holdout_prompt_text=None, measurement_policy="detector_and_judge",
+              golem_cmd=None, seed=41, name="Ada", character="fighter", turn_cap=35,
+              timeout=1800, retry_count=0, retry_of=None, run_id=None, session_id=None,
+              event_log=None, final_ack_grace=1.0):
+    """Run a controller-owned dispatch and finalize its v2 receipt after child exit."""
     session_dir, run_dir = Path(session_dir).resolve(), Path(run_dir).resolve()
-    if type(retry_count) is not int or retry_count not in (0, 1):
-        raise ValueError("retry_count must be 0 or 1; retries require an explicit receipted invocation")
+    if type(retry_count) is not int or retry_count not in (0, 1): raise ValueError("retry_count must be 0 or 1")
+    if type(turn_cap) is not int or turn_cap <= 0: raise ValueError("turn_cap must be positive")
+    if type(is_holdout) is not bool: raise ValueError("is_holdout must be explicit bool")
+    if persona_prompt_text is None and persona_text is None: raise ValueError("persona_prompt_text must be supplied explicitly")
+    if retry_count and not retry_of: raise ValueError("retry requires retry_of")
     repo_root = Path(__file__).resolve().parent.parent
     run_dir.mkdir(parents=True, exist_ok=True)
     capsule = run_dir / "capsule"
-    if capsule.exists():
-        shutil.rmtree(capsule)
+    if capsule.exists(): shutil.rmtree(capsule)
     if capsule == repo_root or repo_root in capsule.parents or capsule == session_dir or session_dir in capsule.parents:
         raise ValueError("capsule must not be inside repository root or canonical session directory")
-    capsule.mkdir(parents=True, mode=0o700)
-    capsule.chmod(0o700)
-    for directory in ("inbox", "outbox"):
-        (capsule / directory).mkdir(mode=0o700)
-    journal_path = capsule / "journal.jsonl"
-    journal_path.touch(mode=0o600)
+    capsule.mkdir(parents=True, mode=0o700); capsule.chmod(0o700)
+    for directory in ("inbox", "outbox"): (capsule / directory).mkdir(mode=0o700)
+    journal_path = capsule / "journal.jsonl"; journal_path.touch(mode=0o600)
     nonce = secrets.token_hex(32)
     playctl_path = capsule / "playctl"
     playctl_path.write_text(_playctl_source(repo_root, capsule / "inbox", capsule / "outbox", journal_path, nonce), encoding="utf-8")
     playctl_path.chmod(0o700)
+    run_id = run_id or secrets.token_hex(16); session_id = session_id or secrets.token_hex(16)
+    persona_prompt_text = persona_prompt_text if persona_prompt_text is not None else persona_text
+    persona_prompt_sha = _sha(persona_prompt_text)
+    if is_holdout:
+        if holdout_prompt_text is not None and _sha(holdout_prompt_text) != persona_prompt_sha: raise ValueError("holdout/persona prompt hashes differ")
+        holdout_sha = _sha(holdout_prompt_text if holdout_prompt_text is not None else persona_prompt_text)
+    else:
+        if holdout_prompt_text is not None: raise ValueError("public runs cannot receive holdout text")
+        holdout_sha = None
     prompt = build_prompt(persona_text if persona_text is not None else persona, turn_cap)
+    if prompt_path:
+        prompt = Path(prompt_path).read_text(encoding="utf-8") + "\n\n" + prompt
     prompt_hash = _sha(prompt)
-    actual_prompt_file = Path(prompt_path).resolve() if prompt_path else run_dir / "prompt.txt"
-    if not prompt_path:
-        actual_prompt_file.write_text(prompt, encoding="utf-8")
-    else:
-        # File may contain sealed text. It is consumed in memory and never copied into the receipt.
-        prompt = actual_prompt_file.read_text(encoding="utf-8") + "\n\n" + build_prompt(persona_text or persona, turn_cap)
-        prompt_hash = _sha(prompt)
-        actual_prompt_file = run_dir / "dispatch_prompt.txt"
-        actual_prompt_file.write_text(prompt, encoding="utf-8")
+    actual_prompt_file = run_dir / "prompt.txt"; actual_prompt_file.write_text(prompt, encoding="utf-8")
     argv = list(golem_cmd) if golem_cmd is not None else codex_golem_argv(model, effort, actual_prompt_file)
-    game_manifest_start = _game_manifest()
-    receipt = {"prompt_sha256": prompt_hash, "prompt_path_sha256": _sha(str(actual_prompt_file)),
-               "golem_argv": argv, "model": model, "effort": effort, "sandbox_policy": SANDBOX_POLICY,
-               "start_wall_time": time.time(), "end_wall_time": None, "exit_code": None,
-               "timeout": False, "retry_count": retry_count, "stdout_sha256": None,
-               "stderr_sha256": None, "journal_sha256": None, "transcript_head_chain_hash": None,
-               "game_sha": game_manifest_start["sha256"], "game_manifest_start": game_manifest_start,
-               "harness_sha": _sha((repo_root / "playtest/harness.py").read_bytes()),
-               "final_game_harness_sha": _sha((repo_root / "dnd_combat/adventure.py").read_bytes() + (repo_root / "playtest/harness.py").read_bytes()),
-               "outcome": "INCOMPLETE_DISPATCH", "turns_taken": 0, "termination": None}
-    (run_dir / "run_receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    # The CLI owns setup/replay and writes all artifacts outside the capsule.
-    if retry_count == 1 and (session_dir / "transcript.jsonl").exists():
-        # Explicit same-session retry: resume from the latest controller-authored output.
-        initial = load_transcript(session_dir / "transcript.jsonl")[-1]
-    else:
-        code, _, setup_error = _run_play(["new", "--seed", str(seed), "--name", name, "--class", character,
-                                          "--persona", persona, "--session", str(session_dir)])
-        if code:
-            receipt.update(outcome="ERROR", end_wall_time=time.time(), exit_code=code)
-            (run_dir / "run_receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n")
-            raise RuntimeError(setup_error or "could not initialize session")
-        initial = load_transcript(session_dir / "transcript.jsonl")[-1]
-    for entry in (capsule / "outbox").iterdir():
-        if entry.is_dir() and not entry.is_symlink(): shutil.rmtree(entry)
-        else: entry.unlink()
-    _atomic_json(capsule / "outbox" / "0000.json", {"output": initial["new_output"], "turn": 0, "terminated": None,
-                                                       "request_id": "0000"})
-    events = []
+    start = _game_manifest(); revision = git_revision(repo_root)
+    measurement = measurement_policy
+    code, _, setup_error = _run_play(["new", "--seed", str(seed), "--name", name, "--class", character,
+        "--persona", persona, "--session", str(session_dir), "--run-id", run_id, "--session-id", session_id,
+        "--persona-prompt", persona_prompt_text, "--turn-cap", str(turn_cap), "--measurement-policy", measurement,
+        "--is-holdout", str(is_holdout).lower(),
+        *( ["--holdout-prompt-sha256", holdout_sha] if is_holdout else [])])
+    if code: raise RuntimeError(setup_error or "could not initialize session")
+    manifest = strict_json_loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+    initial = load_transcript(session_dir / "transcript.jsonl")[-1]
+    for entry in (capsule / "outbox").iterdir(): entry.unlink()
+    _atomic_json(capsule / "outbox" / "0000.json", {"output": initial["new_output"], "turn": 0,
+        "terminated": None, "request_id": "0000"})
     out_capture, err_capture = (run_dir / "stdout.log").open("wb"), (run_dir / "stderr.log").open("wb")
-    started = time.monotonic()
-    prompt_stream = actual_prompt_file.open("rb")
+    started = time.monotonic(); prompt_stream = actual_prompt_file.open("rb")
     child = subprocess.Popen(argv, cwd=capsule, stdin=prompt_stream, stdout=out_capture,
                              stderr=err_capture, close_fds=True, start_new_session=True)
     prompt_stream.close()
-    turn, no_progress, termination, timed_out = 0, 0, None, False
-    processed = set()
+    turns, no_progress = 0, 0
+    game_termination, stop_reason = "playing", None
+    timed_out, protocol_error, controller_stop = False, False, False
+    processed, events = set(), []
     try:
         while True:
             if time.monotonic() - started > timeout:
-                timed_out = True; termination = "timeout"; break
+                timed_out, stop_reason = True, "timeout"; break
             pending = sorted((capsule / "inbox").glob("[0-9][0-9][0-9][0-9].json"))
             for inbox in pending:
-                if inbox.name in processed:
-                    continue
+                if inbox.name in processed: continue
                 processed.add(inbox.name)
                 try:
-                    request = json.loads(inbox.read_text(encoding="utf-8"))
-                    frame = request["inputs"]
-                    request_id = inbox.stem
-                    if request.get("request_id") != request_id:
-                        raise ValueError("request identity mismatch")
-                    if not isinstance(frame, list) or any(not isinstance(x, str) for x in frame): raise ValueError("invalid input frame")
-                    turn += 1
+                    request = strict_json_loads(inbox.read_text(encoding="utf-8"))
+                    frame, request_id = request["inputs"], inbox.stem
+                    if request.get("request_id") != request_id: raise ValueError("request identity mismatch")
+                    if not isinstance(frame, list) or not frame or any(not isinstance(x, str) for x in frame): raise ValueError("invalid input frame")
+                    if turns >= turn_cap: raise ValueError("turn cap exceeded")
                     before = load_transcript(session_dir / "transcript.jsonl")[-1]["snapshot"]
                     code, output, error = _run_play(["step", "--session", str(session_dir), "--inputs-json", json.dumps(frame, ensure_ascii=False)])
-                    rows = load_transcript(session_dir / "transcript.jsonl")
-                    record = rows[-1]
-                    after = record["snapshot"]
-                    no_progress = no_progress + 1 if before.get("canonical_state_hash") == after.get("canonical_state_hash") and before.get("room_id") == after.get("room_id") else 0
-                    if after.get("game_state") == "won": termination = "won"
-                    elif after.get("game_state") == "dead": termination = "dead"
-                    elif code: termination = "dead" if record["termination"] == "dead" else "stalled"
-                    elif no_progress >= 3: termination = "stalled"
-                    elif turn >= turn_cap: termination = "cap"
-                    _controller_reply(capsule / "outbox" / inbox.name,
-                                      {"output": output, "turn": turn, "terminated": termination,
-                                       "request_id": request_id, "nonce": nonce})
-                    if termination:
-                        # A dispatched player may ignore the terminal response; the controller owns stop policy.
+                    if code:
+                        game_termination, stop_reason = "error", "game_error"
+                        _controller_reply(capsule / "outbox" / inbox.name, {"output": error or "play step failed",
+                            "turn": turns, "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
                         break
+                    rows = load_transcript(session_dir / "transcript.jsonl"); record = rows[-1]
+                    after = record["snapshot"]; turns += 1
+                    no_progress = no_progress + 1 if before.get("canonical_state_hash") == after.get("canonical_state_hash") and before.get("room_id") == after.get("room_id") else 0
+                    if after.get("game_state") == "won": game_termination, stop_reason = "won", "won"
+                    elif after.get("game_state") == "dead": game_termination, stop_reason = "dead", "dead"
+                    elif no_progress >= 3: stop_reason = "no_progress"
+                    elif turns >= turn_cap: stop_reason = "cap"
+                    _controller_reply(capsule / "outbox" / inbox.name, {"output": output, "turn": turns,
+                        "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
+                    if stop_reason: controller_stop = True; break
                 except Exception as exc:
-                    try:
-                        _controller_reply(capsule / "outbox" / inbox.name,
-                                          {"output": str(exc), "turn": turn, "terminated": "stalled",
-                                           "request_id": inbox.stem, "nonce": nonce})
-                    except FileExistsError:
-                        pass
-                    termination = "stalled"; break
-            if termination:
-                break
+                    protocol_error = True; stop_reason = "ipc_error"
+                    try: _controller_reply(capsule / "outbox" / inbox.name, {"output": str(exc), "turn": turns,
+                        "terminated": "ipc_error", "request_id": inbox.stem, "nonce": nonce})
+                    except FileExistsError: pass
+                    break
+            if stop_reason: break
             status = child.poll()
             if status is not None:
-                # Drain any final queued frame before exiting; otherwise dispatch is complete.
                 if not any(p.name not in processed for p in (capsule / "inbox").glob("[0-9][0-9][0-9][0-9].json")):
+                    stop_reason = "child_exit_error" if status else "premature_exit"
                     break
             time.sleep(.025)
-        _stop_process_group(child)
+        if controller_stop:
+            try: child.wait(timeout=final_ack_grace)
+            except subprocess.TimeoutExpired: _stop_process_group(child)
+        else: _stop_process_group(child)
     finally:
-        _stop_process_group(child)
-        out_capture.close(); err_capture.close()
-    # Freeze controller-owned capsule artifacts after all members of the golem process group
-    # have been reaped. This bounds accidental descendants; same-user actors can still alter
-    # arbitrary local files and are outside this capsule boundary.
+        _stop_process_group(child); out_capture.close(); err_capture.close()
     (capsule / "CLOSED").write_text("closed\n", encoding="utf-8")
     for path in (capsule / "inbox", capsule / "outbox"):
         for item in path.iterdir():
             if item.is_file() and not item.is_symlink(): item.chmod(0o400)
         path.chmod(0o500)
-    journal_path.chmod(0o400)
-    (capsule / "CLOSED").chmod(0o400)
-    playctl_path.chmod(0o500)
-    capsule.chmod(0o500)
-    if event_log is not None:
-        event_path = Path(event_log)
-        if event_path.exists():
-            for line in event_path.read_text(encoding="utf-8").splitlines():
-                try: events.append(json.loads(line))
-                except json.JSONDecodeError: events.append(line)
-    else:
-        for line in (run_dir / "stdout.log").read_text(encoding="utf-8", errors="replace").splitlines():
-            try: events.append(json.loads(line))
-            except json.JSONDecodeError: pass
+    journal_path.chmod(0o400); (capsule / "CLOSED").chmod(0o400); playctl_path.chmod(0o500); capsule.chmod(0o500)
+    event_path = Path(event_log) if event_log is not None else run_dir / "stdout.log"
+    event_bytes = event_path.read_bytes() if event_path.exists() else b""
+    (run_dir / "audit.log").write_bytes(event_bytes)
+    for line in event_bytes.decode("utf-8", "replace").splitlines():
+        try: events.append(strict_json_loads(line))
+        except (ValueError, json.JSONDecodeError): events.append(line)
+    recognized_types = {"item.completed", "item.started", "turn.completed", "response.completed",
+                        "session.created", "thread.started", "command", "tool_call"}
+    recognized = bool(events) and any(isinstance(event, dict) and event.get("type") in recognized_types for event in events)
     hits = audit_commands(events, capsule, session_dir)
     rows = load_transcript(session_dir / "transcript.jsonl")
     stdout_data, stderr_data = (run_dir / "stdout.log").read_bytes(), (run_dir / "stderr.log").read_bytes()
-    game_manifest_end = _game_manifest()
-    receipt.update(end_wall_time=time.time(), exit_code=child.returncode,
-                   timeout=timed_out, stdout_sha256=_sha(stdout_data), stderr_sha256=_sha(stderr_data),
-                   journal_sha256=_sha(journal_path.read_bytes()), transcript_head_chain_hash=rows[-1]["chain_hash"],
-                   game_manifest_end=game_manifest_end,
-                   final_game_harness_sha=game_manifest_end["sha256"],
-                   turns_taken=turn, termination=termination,
-                   audit_events_seen=len(events),
-                   receipt_finalized_after_child_exit=True,
-                   outcome=("GAME_MODIFIED_DURING_RUN" if game_manifest_start != game_manifest_end else
-                            "INCOMPLETE_DISPATCH" if timed_out else
-                            "BLINDNESS_VIOLATED" if hits else
-                            "AUDIT_UNVERIFIABLE" if event_log is None and child.returncode is not None and not events else "COMPLETE"),
-                   blindness_hits=hits)
-    (run_dir / "run_receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    journal_bytes = journal_path.read_bytes()
+    try:
+        journal_rows = [strict_json_loads(line) for line in journal_bytes.decode("utf-8").splitlines() if line]
+        for item in journal_rows: validate_journal(item)
+        journal_consistent = len(journal_rows) == turns and [item["turn_id"] for item in journal_rows] == list(range(1, turns + 1))
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        journal_rows, journal_consistent = [], False
+    end = _game_manifest()
+    audit_status = "VIOLATED" if hits else "CLEAN" if recognized else "UNVERIFIABLE"
+    if start["game"] != end["game"] or start["harness"] != end["harness"]: outcome = "GAME_MODIFIED_DURING_RUN"
+    elif hits: outcome = "BLINDNESS_VIOLATED"
+    elif not recognized: outcome = "AUDIT_UNVERIFIABLE"
+    elif timed_out or protocol_error or stop_reason in {"child_exit_error", "premature_exit", "ipc_error"}: outcome = "INCOMPLETE_DISPATCH"
+    elif stop_reason not in {"won", "dead", "cap", "no_progress", "player_stop"}: outcome = "INCOMPLETE_DISPATCH"
+    elif child.returncode != 0 and not (controller_stop and child.returncode == -signal.SIGKILL): outcome = "INCOMPLETE_DISPATCH"
+    elif not journal_consistent: outcome = "INCOMPLETE_DISPATCH"
+    else: outcome = "COMPLETE"
+    receipt = {
+        "schema_version": SCHEMA_VERSION, "run_id": run_id, "session_id": session_id,
+        "manifest_sha256": manifest["manifest_sha256"], "game_revision": revision,
+        "harness_revision": revision, "game_files_start": start["game"]["files"],
+        "harness_files_start": start["harness"]["files"], "game_sha": start["game"]["sha256"],
+        "harness_sha": start["harness"]["sha256"], "game_files_end": end["game"]["files"],
+        "harness_files_end": end["harness"]["files"], "game_sha_end": end["game"]["sha256"],
+        "harness_sha_end": end["harness"]["sha256"], "persona_id": persona,
+        "persona_prompt_sha256": persona_prompt_sha, "seed": seed, "is_holdout": is_holdout,
+        "holdout_prompt_sha256": holdout_sha, "narrator_policy": "plain",
+        "turn_policy": "action_frames_v1", "turn_cap": turn_cap,
+        "measurement_policy": measurement,
+        "severity_taxonomy_version": manifest["severity_taxonomy_version"], "retry_of": retry_of,
+        "receipt_finalized_after_child_exit": child.poll() is not None,
+        "controller_stop": controller_stop, "exit_code": child.returncode, "timeout": timed_out,
+        "stop_reason": stop_reason or "premature_exit", "termination": game_termination,
+        "run_outcome": outcome, "turns": turns, "transcript_record_count": len(rows),
+        "journal_record_count": len(journal_rows), "journal_consistent": journal_consistent,
+        "transcript_head_chain_hash": rows[-1]["chain_hash"], "stdout_sha256": _sha(stdout_data),
+        "stderr_sha256": _sha(stderr_data), "journal_sha256": _sha(journal_bytes),
+        "audit_log_sha256": _sha(event_bytes), "audit_status": audit_status,
+        "audit_events_seen": len(events), "model": model, "effort": effort,
+        "prompt_sha256": prompt_hash,
+    }
+    validate_run_receipt(receipt)
+    receipt_path = run_dir / "run_receipt.json"
+    receipt_path.write_text(canonical_json(receipt) + "\n", encoding="utf-8")
     return receipt

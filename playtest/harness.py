@@ -99,7 +99,8 @@ def snapshot(witness: RealAdventure) -> dict:
             "name": room.name,
             "exits": dict(sorted(room.exits.items())),
             "objects": [
-                {"name": item.name, "takeable": bool(item.takeable)}
+                {"name": item.name, "description": item.description,
+                 "aliases": list(item.aliases), "takeable": bool(item.takeable)}
                 for item in room.objects
             ],
             "enemy": ({"name": enemy.name, "hp": enemy.hp, "alive": enemy.alive}

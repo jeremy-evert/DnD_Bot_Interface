@@ -15,6 +15,11 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY, SEVERITY_TAXONOMY_VERSION, canonical_json,
+                     normalize_instance, strict_json_loads, validate_judge_receipt)
+
+JUDGE_VERSION = "1"
+VERIFIER_VERSION = "1"
 
 
 # Definitions are copied from Opus QUALITY_VISION_OPUS.md, section 3,
@@ -33,6 +38,8 @@ JUDGE_MODES = {
     "MENU_WALL": {"definition": "The interface frames play as a fixed verb menu, and players stop attempting anything off-menu.", "severity": 3, "requires_journal": True},
     "NARRATOR_INVENTION": {"definition": "A `DM:` line introduces an entity, number, exit, item, or capability absent from its fact packet.", "severity": 4, "requires_journal": False},
 }
+for _mode, _definition in JUDGE_MODES.items():
+    _definition["severity"] = SEVERITY_TAXONOMY[_mode]
 
 
 class JudgeParseError(ValueError):
@@ -147,7 +154,7 @@ def build_verifier_prompt(records, candidate):
 
 
 def _parse_verifier(text):
-    value = json.loads(text)
+    value = strict_json_loads(text)
     if (not isinstance(value, dict) or set(value) != {"supports", "reason", "quote"} or
             type(value["supports"]) is not bool or not isinstance(value["reason"], str) or
             not isinstance(value["quote"], str)):
@@ -160,27 +167,39 @@ def verify_supported(records, accepted, run_dir=None, verifier_cmd=None,
     """Return verified and unsupported records; callbacks make tests deterministic."""
     verified, unsupported = [], []
     for candidate in accepted:
+        verifier_receipt_sha256 = None
+        audit_status, audit_events_seen = "UNVERIFIABLE", 0
         if verifier is not None:
             result = verifier(records, candidate)
             error = None
+            if isinstance(result, dict):
+                verifier_receipt_sha256 = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         else:
             base = Path(run_dir or tempfile.mkdtemp(prefix="playtest-verifier-"))
-            receipt = run_verifier(records, candidate, base / f"verify-{len(verified)+len(unsupported):02d}",
+            verifier_dir = base / f"verify-{len(verified)+len(unsupported):02d}"
+            receipt = run_verifier(records, candidate, verifier_dir,
                                    verifier_cmd, model, effort, timeout)
             result = receipt.get("result")
             error = receipt.get("parse_error") or (None if receipt.get("outcome") == "COMPLETE" else receipt.get("outcome"))
+            receipt_path = verifier_dir / "judge_receipt.json"
+            if receipt_path.exists(): verifier_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            audit_status, audit_events_seen = receipt.get("audit_status", "UNVERIFIABLE"), receipt.get("audit_events_seen", 0)
         if error or not isinstance(result, dict) or result.get("supports") is not True:
             unsupported.append({"candidate": candidate, "reason_code": "JUDGE_UNVERIFIED",
-                                "reason": (result or {}).get("reason", "verifier unavailable") if isinstance(result, dict) else str(error or "invalid verifier result")})
+                                "reason": (result or {}).get("reason", "verifier unavailable") if isinstance(result, dict) else str(error or "invalid verifier result"),
+                                "audit_status": audit_status, "audit_events_seen": audit_events_seen})
             continue
         quote_cand = {"mode": candidate["mode"], "turn_ids": candidate["turn_ids"],
                       "quote": result.get("quote", ""), "rationale": result.get("reason", "verified")}
         failure = verify_candidate(records, quote_cand)
         if failure:
             unsupported.append({"candidate": candidate, "reason_code": "VERIFIER_QUOTE_NOT_SUPPORTED",
-                                "reason": result.get("reason", ""), "quote_gate": failure["reason_code"]})
+                                "reason": result.get("reason", ""), "quote_gate": failure["reason_code"],
+                                "audit_status": audit_status, "audit_events_seen": audit_events_seen})
         else:
-            verified.append({"candidate": candidate, "verifier": result})
+            verified.append({"candidate": candidate, "verifier": result,
+                             "verifier_receipt_sha256": verifier_receipt_sha256,
+                             "audit_status": audit_status, "audit_events_seen": audit_events_seen})
     return {"verified": verified, "unsupported": unsupported}
 
 
@@ -212,6 +231,7 @@ def run_verifier(records, candidate, run_dir, verifier_cmd=None, model="gpt-6-so
                     receipt["timeout"] = True
             receipt.update(exit_code=process.returncode, stdout=stdout.decode("utf-8", "replace"),
                            stderr=stderr.decode("utf-8", "replace"))
+            receipt["audit_status"], receipt["audit_events_seen"] = _audit_stream(receipt["stdout"])
         if receipt["timeout"]:
             receipt["parse_status"] = "TIMEOUT"
         elif process.returncode:
@@ -236,10 +256,10 @@ def parse_judge_output(text):
     fences = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.I)
     for block in reversed(fences):
         try:
-            value = json.loads(block.strip())
+            value = strict_json_loads(block.strip())
             if isinstance(value, list):
                 return value
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
     decoder = json.JSONDecoder()
     arrays = []
@@ -259,9 +279,11 @@ def parse_judge_output(text):
             if depth == 0:
                 try:
                     value, end = decoder.raw_decode(text[start:index + 1])
+                    # Reparse the isolated value with duplicate-key rejection.
+                    value = strict_json_loads(text[start:index + 1])
                     if isinstance(value, list) and end == index + 1 - start:
                         arrays.append(value)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     pass
     if arrays:
         return arrays[-1]
@@ -273,10 +295,24 @@ def codex_judge_argv(model, effort):
             "-s", "read-only", "--json", "--skip-git-repo-check", "-"]
 
 
+def _audit_stream(stream):
+    events = []
+    for line in stream.splitlines():
+        try: events.append(strict_json_loads(line))
+        except (ValueError, json.JSONDecodeError): continue
+    recognized = {"item.completed", "item.started", "turn.completed", "response.completed",
+                  "session.created", "thread.started", "command", "tool_call"}
+    from .golem_runner import audit_commands
+    hits = audit_commands(events)
+    if hits: return "VIOLATED", len(events)
+    if not any(isinstance(event, dict) and event.get("type") in recognized for event in events): return "UNVERIFIABLE", len(events)
+    return "CLEAN", len(events)
+
+
 def _last_assistant_text(stream):
     messages = []
     for line in stream.splitlines():
-        try: event = json.loads(line)
+        try: event = strict_json_loads(line)
         except (json.JSONDecodeError, TypeError): continue
         item = event.get("item", {}) if isinstance(event, dict) else {}
         if event.get("type") == "item.completed" and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
@@ -287,12 +323,18 @@ def _last_assistant_text(stream):
 def _write_receipt(run_dir, receipt):
     path = Path(run_dir) / "judge_receipt.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(receipt, sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if receipt.get("schema_version") == SCHEMA_VERSION: validate_judge_receipt(receipt)
+    if receipt.get("schema_version") == SCHEMA_VERSION:
+        path.write_text(canonical_json(receipt) + "\n", encoding="utf-8")
+    else:
+        path.write_text(json.dumps(receipt, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return receipt
 
 
 def run_judge(records, journal, run_dir, judge_cmd=None, model="gpt-6-sol", effort="high", timeout=900,
-              verifier_cmd=None, verifier_timeout=600):
+              verifier_cmd=None, verifier_timeout=600, *, run_id=None,
+              manifest_sha256=None, transcript_head_chain_hash=None, journal_sha256=None,
+              verifier_model=None, verifier_effort=None):
     """Run isolated judging and verification; only verified claims are counted."""
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -341,4 +383,50 @@ def run_judge(records, journal, run_dir, judge_cmd=None, model="gpt-6-sol", effo
                 receipt.update(parse_status="MALFORMED", parse_error=str(exc))
     except (OSError, ValueError, TypeError) as exc:
         receipt.update(parse_status="RUN_ERROR", error=str(exc))
+    bindings = (run_id, manifest_sha256, transcript_head_chain_hash, journal_sha256)
+    if all(value is not None for value in bindings):
+        judge_audit, judge_events = _audit_stream(receipt.get("stdout", ""))
+        verification = receipt.get("stage_results", {}).get("verification", {"verified": [], "unsupported": []})
+        verifier_statuses = [item.get("audit_status", "UNVERIFIABLE") for item in verification.get("verified", []) + verification.get("unsupported", [])]
+        verifier_audit = ("VIOLATED" if "VIOLATED" in verifier_statuses else
+                          "UNVERIFIABLE" if any(item != "CLEAN" for item in verifier_statuses) else "CLEAN")
+        audit_status = "VIOLATED" if "VIOLATED" in {judge_audit, verifier_audit} else "UNVERIFIABLE" if "UNVERIFIABLE" in {judge_audit, verifier_audit} else "CLEAN"
+        if audit_status == "VIOLATED": outcome = "BLINDNESS_VIOLATED"
+        elif receipt.get("outcome") != "COMPLETE": outcome = "INCOMPLETE_JUDGE"
+        elif audit_status == "UNVERIFIABLE": outcome = "AUDIT_UNVERIFIABLE"
+        else: outcome = "COMPLETE"
+        counted = []
+        decisions = list(receipt.get("discards", []))
+        verified_by_candidate = {canonical_json(item["candidate"]): item for item in verification.get("verified", [])}
+        unsupported_by_candidate = {canonical_json(item["candidate"]): item for item in verification.get("unsupported", [])}
+        for candidate in receipt.get("raw_accepted", []):
+            key = canonical_json(candidate)
+            accepted = verified_by_candidate.get(key)
+            failure = unsupported_by_candidate.get(key)
+            if accepted and outcome == "COMPLETE":
+                turns = candidate["turn_ids"]
+                selected = [row for row in records if row["turn_id"] in set(turns)]
+                evidence_sha = hashlib.sha256(canonical_json(selected).encode("utf-8")).hexdigest()
+                counted.append(normalize_instance(source="judge", mode=candidate["mode"], turn_ids=turns,
+                    quote=candidate["quote"], rationale=candidate["rationale"], evidence_kind="transcript",
+                    evidence_sha256=evidence_sha,
+                    verifier_receipt_sha256=accepted["verifier_receipt_sha256"]))
+                decisions.append({"candidate": candidate, "decision": "COUNTED"})
+            else:
+                decisions.append({"candidate": candidate, "decision": "DISCARDED",
+                                  "reason_code": failure.get("reason_code", "JUDGE_UNVERIFIED") if failure else "JUDGE_INCOMPLETE"})
+        receipt = {"schema_version": SCHEMA_VERSION, "run_id": run_id,
+            "manifest_sha256": manifest_sha256, "transcript_head_chain_hash": transcript_head_chain_hash,
+            "journal_sha256": journal_sha256, "bundle_sha256": bundle_hash, "prompt_sha256": prompt_hash,
+            "judge_version": JUDGE_VERSION, "verifier_version": VERIFIER_VERSION,
+            "judge_model": model, "judge_effort": effort,
+            "verifier_model": verifier_model or model, "verifier_effort": verifier_effort or effort,
+            "severity_taxonomy_version": SEVERITY_TAXONOMY_VERSION,
+            "process_status": "OK" if receipt.get("parse_status") == "OK" else receipt.get("parse_status", "INCOMPLETE"),
+            "audit_status": audit_status, "audit_events_seen": judge_events + sum(item.get("audit_events_seen", 0) for item in verification.get("verified", []) + verification.get("unsupported", [])),
+            "candidate_decisions": decisions, "counted": counted,
+            "discarded_judge_claims": len(decisions) - len(counted), "judge_outcome": outcome}
+    else:
+        # Unbound pre-contract calls remain readable v1 test/diagnostic evidence, never eligible.
+        receipt["schema_version"] = 1
     return _write_receipt(run_dir, receipt)

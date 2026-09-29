@@ -5,17 +5,14 @@ import json
 import os
 from pathlib import Path
 
-from .schema import TRANSCRIPT_FIELDS, validate_transcript_record
+from .schema import (LEGACY_TRANSCRIPT_FIELDS, LegacyRecords, TRANSCRIPT_FIELDS,
+                     canonical_json, strict_json_loads, validate_transcript_record)
 
 ZERO_HASH = "0" * 64
 
 
 class ReplayDivergence(ValueError):
     """A fresh replay did not preserve the previously rendered output."""
-
-
-def canonical_json(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _chain_hash(record):
@@ -33,8 +30,8 @@ def verify_chain(path):
             if not line.endswith("\n"):
                 raise ValueError(f"transcript line {line_number} is incomplete")
             try:
-                record = json.loads(line)
-            except (json.JSONDecodeError, TypeError) as exc:
+                record = strict_json_loads(line)
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise ValueError(f"invalid transcript line {line_number}") from exc
             if canonical_json(record) + "\n" != line:
                 raise ValueError(f"noncanonical transcript line {line_number}")
@@ -48,15 +45,29 @@ def verify_chain(path):
                 raise ValueError(f"transcript output hash mismatch at line {line_number}")
             previous = record["chain_hash"]
             records.append(record)
+    versions = {record.get("schema_version", 1) for record in records}
+    if len(versions) > 1:
+        raise ValueError("transcript cannot mix legacy and v2 records")
+    if versions == {2}:
+        identities = {(record["run_id"], record["manifest_sha256"], record["game_sha"], record["harness_sha"])
+                      for record in records}
+        if len(identities) != 1: raise ValueError("transcript records disagree on manifest/source identity")
+        if not records or sum(record["frame_kind"] == "setup" for record in records) != 1:
+            raise ValueError("v2 transcript requires exactly one setup record")
+        if records[0]["frame_kind"] != "setup":
+            raise ValueError("v2 setup record must be first")
+        for index, record in enumerate(records[1:], 1):
+            if record["frame_kind"] != "action" or record["turn_id"] != index or record["frame_id"] != index:
+                raise ValueError("v2 action turn/frame ids must be contiguous")
     anchor_path = path.with_name(path.name + ".head")
     try:
-        anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        anchor = strict_json_loads(anchor_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("transcript head anchor is missing or invalid") from exc
     expected_anchor = {"record_count": len(records), "chain_hash": previous}
     if anchor != expected_anchor:
         raise ValueError("transcript head anchor mismatch (transcript may be truncated or altered)")
-    return records
+    return LegacyRecords(records) if versions == {1} else records
 
 
 def load_transcript(path):
@@ -72,7 +83,8 @@ class TranscriptWriter:
 
     def append_verified(self, record_without_hashes):
         # Callers supply all semantic fields; hashes and predecessor are writer-owned.
-        expected = set(TRANSCRIPT_FIELDS) - {"prev_chain_hash", "chain_hash"}
+        fields = TRANSCRIPT_FIELDS if "schema_version" in record_without_hashes else LEGACY_TRANSCRIPT_FIELDS
+        expected = set(fields) - {"prev_chain_hash", "chain_hash"}
         expected.add("full_output")
         if not isinstance(record_without_hashes, dict) or set(record_without_hashes) != expected:
             raise ValueError("record must contain exactly the transcript fields except writer-owned hashes")

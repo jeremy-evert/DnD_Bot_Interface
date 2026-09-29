@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 import re
+from .schema import count_turns, SEVERITY_TAXONOMY
+from .harness import snapshot as replay_snapshot
 
 DETECTOR_VERSION = "1"
 
 
 def _instance(mode, turns, quote, rationale, severity):
+    severity = SEVERITY_TAXONOMY[mode]
     return {"mode": mode, "turn_ids": list(turns), "quote": quote,
             "rationale": rationale, "detector_version": DETECTOR_VERSION,
             "severity": severity}
@@ -162,10 +165,18 @@ def probe_conventions():
     quote = "Choose move, look, status, take, use, or talk."
     instances = []
     if quote in result.output:
-        instances.append(_instance("CONVENTION_CLASH", [], quote, "probe: bare north is unrecognized at the top prompt.", 2))
+        item = _instance("CONVENTION_CLASH", [], quote, "probe: bare north is unrecognized at the top prompt.", 2)
+        item["probe_artifact"] = {"probe_version": 1, "seed": 1,
+            "input_calls": ["Probe", "fighter", "north"], "output": result.output,
+            "snapshot": replay_snapshot(result.witness)}
+        instances.append(item)
     result = replay(1, ["Probe", "fighter", "s"])
     if "Probe the Fighter:" in result.output:
-        instances.append(_instance("CONVENTION_CLASH", [], "Probe the Fighter:", "probe: s resolves to status rather than south.", 2))
+        item = _instance("CONVENTION_CLASH", [], "Probe the Fighter:", "probe: s resolves to status rather than south.", 2)
+        item["probe_artifact"] = {"probe_version": 1, "seed": 1,
+            "input_calls": ["Probe", "fighter", "s"], "output": result.output,
+            "snapshot": replay_snapshot(result.witness)}
+        instances.append(item)
     return instances
 
 
@@ -190,7 +201,7 @@ def curiosity_events(records):
         if any(room.get("enemy", {}).get("alive") and not new_rooms.get(key, {}).get("enemy", {}).get("alive") for key, room in old_rooms.items() if room.get("enemy")):
             earned += 1
     callback = sum(bool(re.search(r"remember|recognizes|again|remains", r["new_output"], re.I)) for r in records)
-    return {"DISCOVERY": len(entered), "EARNED_CONSEQUENCE": earned, "CALLBACK": callback, "turns": len(records)}
+    return {"DISCOVERY": len(entered), "EARNED_CONSEQUENCE": earned, "CALLBACK": callback, "turns": count_turns(records)}
 
 
 def session_facts(records):
@@ -198,6 +209,6 @@ def session_facts(records):
     combat = sum(any(c.lower().strip() in {"attack", "a", "use", "u", "potion"} for c in r.get("input_calls", [])) and "Your turn." in r["new_output"] for r in records)
     attacks = sum(any(c.lower().strip() in {"attack", "a"} for c in r.get("input_calls", []))
                   for r in records if any(c.lower().strip() in {"attack", "a", "use", "u", "potion"} for c in r.get("input_calls", [])) and "Your turn." in r["new_output"])
-    return {"turns": len(records), "termination": records[-1]["termination"] if records else None,
+    return {"turns": count_turns(records), "termination": records[-1]["termination"] if records else None,
             "rooms_visited": len(rooms), "hero_combat_decisions": combat,
             "attack_share": attacks / combat if combat else 0.0}

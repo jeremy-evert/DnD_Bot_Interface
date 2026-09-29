@@ -5,6 +5,7 @@ import unittest
 from dnd_combat.world import make_dungeon
 from playtest import fixtures
 from playtest.detectors import curiosity_events, run_all, session_facts, verify_instance_quotes
+from playtest.schema import count_turns
 from playtest.transcript import load_transcript
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,8 +127,9 @@ class DetectorTests(unittest.TestCase):
             table[name] = {mode: sum(x["mode"] == mode for x in items) for mode in modes}
             shares[name] = session_facts(records)["attack_share"]
             self.assertTrue(verify_instance_quotes(records, [x for x in items if x["turn_ids"]]))
-            self.assertEqual(session_facts(records)["turns"], len(records))
-            self.assertEqual(curiosity_events(records)["turns"], len(records))
+            # Annabelle action-count clause: setup record is excluded from every rate denominator.
+            self.assertEqual(session_facts(records)["turns"], count_turns(records))
+            self.assertEqual(curiosity_events(records)["turns"], count_turns(records))
         expected = {
             "pilot1_explorer": [1, 0, 1, 0, 0, 5, 0, 0, 2, 0, 1],
             "pilot2_tactician": [1, 0, 1, 0, 0, 5, 0, 0, 2, 1, 2],

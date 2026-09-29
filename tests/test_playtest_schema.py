@@ -5,8 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from playtest.schema import (LegacyArtifact, canonical_json, source_digest,
-                             source_manifest, strict_json_loads, validate_manifest)
+from playtest.schema import (LegacyArtifact, RUN_RECEIPT_FIELDS, canonical_json, load_run_receipt,
+                             source_digest, source_manifest, strict_json_loads, validate_manifest)
 
 
 class SchemaContractTests(unittest.TestCase):
@@ -43,6 +43,15 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIsInstance(marker, LegacyArtifact)
         self.assertTrue(marker.legacy)
         self.assertFalse(marker.eligible)
+
+    def test_sandbox_policy_is_required_for_current_receipts_and_legacy_loads_as_none(self):
+        self.assertIn("sandbox_policy", RUN_RECEIPT_FIELDS)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "old-receipt.json"
+            path.write_text(canonical_json({"schema_version": 1, "old": True}) + "\n", encoding="utf-8")
+            receipt = load_run_receipt(path)
+        self.assertTrue(receipt.legacy)
+        self.assertIsNone(receipt.data["sandbox_policy"])
 
     def test_revision_uses_full_object_id_or_null_not_unknown_sentinel(self):
         from playtest.schema import _revision

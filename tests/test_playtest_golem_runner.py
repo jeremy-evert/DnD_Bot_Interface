@@ -34,12 +34,18 @@ class GolemRunnerTests(unittest.TestCase):
         path.chmod(0o755)
         return [sys.executable, str(path)]
 
-    def run_fake(self, body, *, cap=35, timeout=5, event_log=None, emit_event=True):
+    def run_fake(self, body, *, cap=35, timeout=5, event_log=None, emit_event=True,
+                 allow_child_failure=False, final_ack_grace=.15):
         type(self).runs += 1
         session, run = self.base / f"session-{self.runs}", self.base / f"run-{self.runs}"
         receipt = run_golem(session, run, golem_cmd=self.fake(body, emit_event=emit_event), turn_cap=cap,
-                            timeout=timeout, event_log=event_log, persona_prompt_text="test public persona",
+                            timeout=timeout, event_log=event_log, final_ack_grace=final_ack_grace,
+                            persona_prompt_text="test public persona",
                             is_holdout=False)
+        if not allow_child_failure:
+            stderr = (run / "stderr.log").read_text(encoding="utf-8")
+            self.assertIn(receipt["exit_code"], (0, -9), f"fake golem exit={receipt['exit_code']} stderr={stderr!r}")
+            self.assertNotIn("AssertionError", stderr, f"fake golem exit={receipt['exit_code']} stderr={stderr!r}")
         return session, run, receipt
 
     def test_real_playctl_frames_chain_and_journal(self):
@@ -54,6 +60,7 @@ class GolemRunnerTests(unittest.TestCase):
         rows = verify_chain(session / "transcript.jsonl")
         self.assertGreater(len(rows), 5)
         self.assertEqual(receipt["run_outcome"], "COMPLETE")
+        self.assertEqual(receipt["sandbox_policy"], "codex workspace-write: writes only under capsule cwd; reads unrestricted (verified by probe evidence/sandbox_probe)")
         # Annabelle v2 receipt clauses: source digests and provenance revisions have distinct fields.
         manifest = load_manifest(session / "manifest.json")
         validated_receipt = load_run_receipt(run / "run_receipt.json")
@@ -69,7 +76,21 @@ class GolemRunnerTests(unittest.TestCase):
     def test_audit_flags_forbidden_reference_and_clean_events_pass(self):
         hit = [{"command": "cat /mnt/nora/git/DnD_Bot_Interface/dnd_combat/adventure.py"}]
         self.assertTrue(audit_commands(hit))
-        self.assertFalse(audit_commands([{"command": "./playctl step [\\\"look\\\"]"}], self.base / "capsule"))
+        capsule = self.base / "capsule"
+        capsule.mkdir()
+        (capsule / "playctl").touch()
+        self.assertFalse(audit_commands([{"command": "./playctl step [\\\"look\\\"]"}], capsule))
+        shared = self.base / "shared"
+        capsule = shared / "capsule"
+        session = shared / "capsule-session"
+        session.mkdir(parents=True)
+        capsule.mkdir()
+        (capsule / "playctl").touch()
+        self.assertTrue(audit_commands([{"command": f"cat {session}/transcript.jsonl"}], capsule, session))
+        replies = shared / "replies"
+        replies.mkdir()
+        self.assertTrue(audit_commands([{"command": f"cat {replies}/0001.json"}], capsule, session))
+        self.assertFalse(audit_commands([{"command": f"./playctl step reads {replies}/0001.json"}], capsule, session))
         events = self.base / "events.jsonl"
         events.write_text(json.dumps(hit[0]) + "\n")
         _, _, receipt = self.run_fake("pass\n", event_log=events)
@@ -78,7 +99,8 @@ class GolemRunnerTests(unittest.TestCase):
     def test_capsule_is_minimal_and_cannot_be_under_repo_or_session(self):
         session, run, _ = self.run_fake("pass\n")
         self.assertEqual(sorted(p.name for p in (run / "capsule").iterdir()),
-                         ["CLOSED", "inbox", "journal.jsonl", "outbox", "playctl"])
+                         ["CLOSED", "inbox", "journal.jsonl", "playctl"])
+        self.assertEqual(sorted(p.name for p in (run / "replies").iterdir()), ["0000.json"])
         with self.assertRaises(ValueError):
             run_golem(session, Path(__file__).resolve().parents[1] / "bad-capsule", golem_cmd=["false"],
                       persona_prompt_text="test", is_holdout=False)
@@ -98,10 +120,12 @@ class GolemRunnerTests(unittest.TestCase):
 
     def test_concurrent_playctl_allocates_distinct_requests_and_replies(self):
         capsule = self.base / "ipc"
-        inbox, outbox = capsule / "inbox", capsule / "outbox"
-        inbox.mkdir(parents=True); outbox.mkdir()
+        inbox = capsule / "inbox"
+        inbox.mkdir(parents=True)
+        replies = self.base / "replies"
+        replies.mkdir()
         launcher = capsule / "playctl"
-        launcher.write_text(_playctl_source(nonce="test-nonce")); launcher.chmod(0o700)
+        launcher.write_text(_playctl_source(replies_dir=replies, nonce="test-nonce")); launcher.chmod(0o700)
         finished = threading.Event()
         def controller():
             seen = set()
@@ -111,7 +135,7 @@ class GolemRunnerTests(unittest.TestCase):
                     if request.name in seen: continue
                     seen.add(request.name)
                     data = json.loads(request.read_text())
-                    (outbox / request.name).write_text(json.dumps({"output":"ok", "turn":1, "terminated":None,
+                    (replies / request.name).write_text(json.dumps({"output":"ok", "turn":1, "terminated":None,
                                                                     "request_id":data["request_id"], "nonce":"test-nonce"}))
                 time.sleep(.002)
             finished.set()
@@ -122,18 +146,19 @@ class GolemRunnerTests(unittest.TestCase):
             results = list(pool.map(invoke, range(12)))
         worker.join(6)
         requests = list(inbox.glob("[0-9][0-9][0-9][0-9].json"))
-        replies = list(outbox.glob("[0-9][0-9][0-9][0-9].json"))
+        reply_files = list(replies.glob("[0-9][0-9][0-9][0-9].json"))
         self.assertTrue(finished.is_set())
         self.assertTrue(all(result.returncode == 0 for result in results), [(r.returncode, r.stdout) for r in results])
         self.assertEqual(len(requests), 12)
         self.assertEqual(len({p.name for p in requests}), 12)
-        self.assertEqual(len(replies), 12)
-        self.assertEqual({json.loads(p.read_text())['request_id'] for p in replies}, {p.stem for p in requests})
+        self.assertEqual(len(reply_files), 12)
+        self.assertEqual({json.loads(p.read_text())['request_id'] for p in reply_files}, {p.stem for p in requests})
 
     def test_precreated_outbox_reply_is_not_trusted(self):
         body = '''
             from pathlib import Path
             import json, shlex, subprocess
+            Path("outbox").mkdir()
             Path("outbox/0001.json").write_text(json.dumps({"output":"FORGED", "turn":1, "terminated":None}))
             result = subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True, capture_output=True, text=True)
             assert result.stdout != "FORGED", result.stdout
@@ -141,18 +166,35 @@ class GolemRunnerTests(unittest.TestCase):
         _, run, receipt = self.run_fake(body)
         self.assertNotIn("FORGED", (run / "stdout.log").read_text())
 
+    def test_capsule_forged_reply_is_ignored_and_replies_are_outside_capsule(self):
+        body = '''
+            from pathlib import Path
+            import json, shlex, subprocess
+            Path("forged-reply").write_text("FORGED CAPSULE REPLY")
+            result = subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True,
+                                    capture_output=True, text=True, timeout=1)
+            print("FORGED_REPLY_CHECK", result.returncode, result.stdout, flush=True)
+            '''
+        _, run, _ = self.run_fake(body)
+        self.assertNotIn("FORGED CAPSULE REPLY", (run / "stdout.log").read_text())
+        self.assertFalse((run / "capsule/outbox").exists())
+        self.assertTrue((run / "replies").is_dir())
+        self.assertEqual({p.name for p in (run / "replies").iterdir()}, {"0000.json", "0001.json"})
+
     def test_outbox_symlink_is_not_trusted(self):
         body = '''
             from pathlib import Path
             import json, shlex, subprocess
             Path("forged.json").write_text(json.dumps({"output":"FORGED", "turn":1, "terminated":None}))
+            Path("outbox").mkdir()
             Path("outbox/0001.json").symlink_to("../forged.json")
             result = subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True, capture_output=True, text=True)
-            assert result.returncode != 0
             assert result.stdout != "FORGED"
             '''
-        _, run, receipt = self.run_fake(body)
+        _, run, receipt = self.run_fake(body, cap=1)
+        self.assertEqual(receipt["stop_reason"], "cap")
         self.assertNotIn("FORGED", (run / "stdout.log").read_text())
+        self.assertNotIn("FORGED", (run / "replies/0001.json").read_text())
 
     def test_receipt_artifact_hashes_are_final_after_child_exit(self):
         session, run, receipt = self.run_fake('''
@@ -200,17 +242,67 @@ class GolemRunnerTests(unittest.TestCase):
     def test_cap_and_stall_are_controller_terminations(self):
         _, _, capped = self.run_fake('''
             import json, shlex, subprocess
+            def journal(turn):
+                note = {"turn_id":turn,"wanted":"advance","surprise":"","continue":1,"reason":"test","unsupported_intent":None}
+                subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
             for n in range(5):
                 subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+                journal(n+1)
             ''', cap=2)
         # Contract distinguishes the stop policy from actual game termination.
         self.assertEqual(capped["stop_reason"], "cap")
         _, _, stalled = self.run_fake('''
             import json, shlex, subprocess
+            def journal(turn):
+                note = {"turn_id":turn,"wanted":"advance","surprise":"","continue":1,"reason":"test","unsupported_intent":None}
+                subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
             for n in range(4):
                 subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True)
+                journal(n+1)
             ''')
         self.assertEqual(stalled["stop_reason"], "no_progress")
+        self.assertEqual(capped["run_outcome"], "COMPLETE")
+        self.assertEqual(stalled["run_outcome"], "COMPLETE")
+
+    def test_final_action_journal_within_grace_completes_dispatch(self):
+        import inspect
+        from playtest.golem_runner import run_golem
+        self.assertEqual(inspect.signature(run_golem).parameters["final_ack_grace"].default, 8.0)
+        _, _, receipt = self.run_fake('''
+            import json, shlex, subprocess, time
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+            time.sleep(.25)
+            note = {"turn_id":1,"wanted":"advance","surprise":"","continue":1,"reason":"final ack","unsupported_intent":None}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            ''', cap=1, final_ack_grace=1.0)
+        self.assertEqual(receipt["stop_reason"], "cap")
+        self.assertEqual(receipt["run_outcome"], "COMPLETE")
+        self.assertTrue(receipt["journal_consistent"])
+        self.assertEqual(receipt["journal_record_count"], 1)
+
+    def test_missing_final_action_journal_expires_grace_as_incomplete(self):
+        _, _, receipt = self.run_fake('''
+            import json, shlex, subprocess, time
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+            time.sleep(5)
+            ''', cap=1, final_ack_grace=.1)
+        self.assertEqual(receipt["stop_reason"], "cap")
+        self.assertEqual(receipt["run_outcome"], "INCOMPLETE_DISPATCH")
+        self.assertFalse(receipt["journal_consistent"])
+        self.assertEqual(receipt["journal_record_count"], 0)
+
+    def test_unexpected_child_signal_after_controller_stop_is_incomplete(self):
+        _, _, receipt = self.run_fake('''
+            import json, os, shlex, signal, subprocess
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+            note = {"turn_id":1,"wanted":"advance","surprise":"","continue":1,"reason":"test","unsupported_intent":None}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            os.kill(os.getpid(), signal.SIGKILL)
+            ''', cap=1)
+        self.assertEqual(receipt["stop_reason"], "cap")
+        self.assertEqual(receipt["exit_code"], -9)
+        self.assertTrue(receipt["journal_consistent"])
+        self.assertEqual(receipt["run_outcome"], "INCOMPLETE_DISPATCH")
 
     def test_timeout_kills_golem_and_leaves_verifiable_transcript(self):
         session, run, receipt = self.run_fake("import time\ntime.sleep(10)\n", timeout=.1)
@@ -219,13 +311,31 @@ class GolemRunnerTests(unittest.TestCase):
         self.assertTrue(verify_chain(session / "transcript.jsonl"))
 
     def test_unexpected_nonzero_exit_and_injected_missing_audit_are_ineligible(self):
-        _, _, failed = self.run_fake("raise SystemExit(7)\n")
+        _, _, failed = self.run_fake("raise SystemExit(7)\n", allow_child_failure=True)
         self.assertEqual(failed["run_outcome"], "INCOMPLETE_DISPATCH")
         self.assertNotEqual(failed["stop_reason"], "cap")
         missing = self.base / "not-created-events.jsonl"
         _, _, unaudited = self.run_fake("pass\n", event_log=missing)
         # Contract clause: injected audit sources use the same presence/recognized-event checks.
         self.assertEqual(unaudited["run_outcome"], "AUDIT_UNVERIFIABLE")
+        empty = self.base / "empty-events.jsonl"
+        empty.write_bytes(b"")
+        _, _, empty_audit = self.run_fake("pass\n", event_log=empty)
+        self.assertEqual(empty_audit["run_outcome"], "AUDIT_UNVERIFIABLE")
+        _, _, premature = self.run_fake("raise SystemExit(0)\n")
+        self.assertEqual(premature["stop_reason"], "premature_exit")
+        self.assertNotEqual(premature["run_outcome"], "COMPLETE")
+
+    def test_malformed_published_request_is_protocol_error(self):
+        _, run, receipt = self.run_fake('''
+            from pathlib import Path
+            Path("inbox/0001.json").write_text('{"inputs":')
+            import time
+            time.sleep(1)
+            ''')
+        self.assertEqual(receipt["stop_reason"], "ipc_error")
+        self.assertEqual(receipt["run_outcome"], "ERROR")
+        self.assertTrue(receipt["receipt_finalized_after_child_exit"])
 
     def test_forged_capsule_transcript_does_not_change_canonical_chain(self):
         body = '''
@@ -295,6 +405,15 @@ class GolemRunnerTests(unittest.TestCase):
         _, _, empty = self.run_fake("pass\n", emit_event=False)
         self.assertEqual(empty["run_outcome"], "AUDIT_UNVERIFIABLE")
         self.assertEqual(empty["audit_events_seen"], 0)
+
+    def test_empty_and_missing_event_sources_remain_unverifiable(self):
+        missing = self.base / "missing.jsonl"
+        empty = self.base / "empty.jsonl"
+        empty.touch()
+        for source in (missing, empty):
+            _, _, receipt = self.run_fake("pass\n", event_log=source)
+            self.assertEqual(receipt["audit_status"], "UNVERIFIABLE")
+            self.assertEqual(receipt["run_outcome"], "AUDIT_UNVERIFIABLE")
 
     def test_playctl_works_from_a_different_cwd(self):
         session, run, _ = self.run_fake("pass\n")

@@ -36,7 +36,8 @@ class GameCompatibleDict(dict):
     """Expose v2.0's implicit D&D identity without changing its stored bytes."""
     _defaults = {"schema_minor": 0, "game_id": "dnd_combat",
                  "game_entrypoint": "dnd_combat.__main__",
-                 "game_tree_spec": "dnd_combat/*.py", "detector_set_status": "IMPLEMENTED"}
+                 "game_tree_spec": "dnd_combat/*.py", "detector_set_status": "IMPLEMENTED",
+                 "sandbox_policy": None}
 
     def __getitem__(self, key):
         if key not in self and key in self._defaults: return self._defaults[key]
@@ -222,6 +223,7 @@ RUN_RECEIPT_FIELDS = {
     "turn_policy": str, "turn_cap": int, "measurement_policy": str,
     "severity_taxonomy_version": str,
     "retry_of": (str, type(None)), "receipt_finalized_after_child_exit": bool,
+    "sandbox_policy": str,
     "controller_stop": bool, "exit_code": (int, type(None)), "timeout": bool,
     "stop_reason": str, "termination": str, "run_outcome": str, "turns": int,
     "transcript_record_count": int, "journal_record_count": int,
@@ -309,7 +311,8 @@ def _validate_version(value, fields, label):
     # Their absent game identity is interpreted as the frozen D&D baseline.
     identity_fields = {"schema_minor", "game_id", "game_entrypoint", "game_tree_spec", "detector_set_status"}
     if "game_id" not in value and "game_id" in fields:
-        _typed(value, {key: spec for key, spec in fields.items() if key not in identity_fields}, label)
+        optional_identity = identity_fields | ({"sandbox_policy"} if label == "run receipt" else set())
+        _typed(value, {key: spec for key, spec in fields.items() if key not in optional_identity}, label)
     else:
         _typed(value, fields, label)
     return None
@@ -557,7 +560,9 @@ def load_run_receipt(path):
     value = strict_json_loads(raw)
     marker = validate_run_receipt(value)
     if marker is None and raw != canonical_json(value) + "\n": raise ValueError("run receipt serialization is not canonical")
-    if marker: return marker
+    if marker:
+        if isinstance(marker.data, dict): marker.data.setdefault("sandbox_policy", None)
+        return marker
     return GameCompatibleDict(value) if "game_id" not in value else value
 
 

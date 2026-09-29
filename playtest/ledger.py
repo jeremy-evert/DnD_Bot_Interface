@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY_VERSION, canonical_json, catalog_digest,
-                     normalize_instance, strict_json_loads, validate_ledger_entry)
+                     GAME_ENTRYPOINTS, GAME_TREE_SPECS, normalize_instance, strict_json_loads, validate_ledger_entry)
 from .transcript import ZERO_HASH
 
 LEDGER_VERSION = 2
@@ -88,7 +88,8 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
                judge_status=None, termination=None, run_outcome="COMPLETE", turns=0,
                transcript_record_count=None, verified_instances=(), curiosity=None,
                coverage=None, discarded_judge_claims=None, eligibility_flags=None,
-               expected_content_change=None):
+               expected_content_change=None, game_id="dnd_combat", schema_minor=1,
+               detector_set_status="IMPLEMENTED"):
     """Build from already validated and normalized artifact facts only."""
     if run_outcome not in RUN_OUTCOMES: raise ValueError("invalid run_outcome")
     if type(is_holdout) is not bool: raise ValueError("is_holdout must be bool")
@@ -102,6 +103,8 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
         if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
             raise ValueError(f"{label} must be a lowercase SHA-256 digest")
     if type(seed) is not int: raise ValueError("seed must be an integer")
+    if game_id not in GAME_ENTRYPOINTS: raise ValueError("unsupported game_id")
+    if detector_set_status not in {"IMPLEMENTED", "NOT_IMPLEMENTED"}: raise ValueError("invalid detector_set_status")
     if type(turns) is not int or turns < 0: raise ValueError("turns must be nonnegative action frames")
     normalized = list(verified_instances)
     for item in normalized:
@@ -128,9 +131,13 @@ def make_entry(*, run_id, game_sha, harness_sha, detector_version, persona_id, s
         "ZERO_ACTION_TURNS" if turns == 0 else "MISSING_PAIR_IDENTITY" if not identity_present else
         "JUDGE_" + judge_status if judge_status not in {"NOT_REQUESTED", "COMPLETE"} else "INELIGIBLE")
     if facts.get("comparison_eligible") is False: eligible, reason = False, facts.get("reason_code") or "INELIGIBLE"
+    if detector_set_status == "NOT_IMPLEMENTED": eligible, reason = False, "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"
     facts.update(comparison_eligible=eligible, reason_code=reason)
     if content_catalog is None: raise ValueError("content catalog is required")
-    entry = {"schema_version": SCHEMA_VERSION, "run_id": run_id, "session_id": session_id,
+    entry = {"schema_version": SCHEMA_VERSION, "schema_minor": schema_minor,
+        "game_id": game_id, "game_entrypoint": GAME_ENTRYPOINTS[game_id],
+        "game_tree_spec": GAME_TREE_SPECS[game_id], "detector_set_status": detector_set_status,
+        "run_id": run_id, "session_id": session_id,
         "manifest_sha256": manifest_sha256, "run_receipt_sha256": run_receipt_sha256,
         "transcript_head_chain_hash": transcript_head_chain_hash, "journal_sha256": journal_sha256,
         "game_revision": game_revision, "harness_revision": harness_revision,

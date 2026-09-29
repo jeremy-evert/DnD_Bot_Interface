@@ -16,7 +16,7 @@ import time
 from . import harness
 from .golem_prompt import build_prompt
 from .play import main as play_main
-from .schema import (SCHEMA_VERSION, canonical_json, git_revision, source_manifest,
+from .schema import (SCHEMA_VERSION, SCHEMA_MINOR, GAME_ENTRYPOINTS, GAME_TREE_SPECS, canonical_json, git_revision, source_manifest,
                      strict_json_loads, validate_run_receipt)
 from .transcript import load_transcript
 
@@ -52,10 +52,11 @@ def validate_journal(entry):
     return entry
 
 
-def audit_commands(events, capsule_path=None, session_path=None):
+def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_combat"):
     """Return forbidden event hits. Capsule/playctl references are allowed."""
     forbidden = ("dnd_combat", "DnD_Bot_Interface", "playtest/", "transcript.jsonl",
                  "manifest.json", "frames.jsonl", ".git", "/mnt/nora")
+    if game_id == "delve": forbidden += ("delve/",)
     capsule = str(Path(capsule_path).resolve()) if capsule_path else ""
     session = str(Path(session_path).resolve()) if session_path else ""
     hits = []
@@ -128,14 +129,15 @@ def _stop_process_group(child):
         child.wait()
 
 
-def _game_manifest():
+def _game_manifest(game_id=None):
     """Hash sorted Python source paths and contents; this detects ordinary run-time edits.
 
     It is not an external trust anchor: an actor able to rewrite the checkout and receipt
     storage together can rewrite this evidence too.
     """
     root = Path(__file__).resolve().parent.parent
-    return {"game": source_manifest(root, "game"),
+    game_id = game_id or "dnd_combat"
+    return {"game": source_manifest(root, "game", game_id),
             "harness": source_manifest(root, "harness")}
 
 
@@ -223,11 +225,13 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
               is_holdout=None, holdout_prompt_text=None, measurement_policy="detector_and_judge",
               golem_cmd=None, seed=41, name="Ada", character="fighter", turn_cap=35,
               timeout=1800, retry_count=0, retry_of=None, run_id=None, session_id=None,
+              game_id="dnd_combat",
               event_log=None, final_ack_grace=1.0):
     """Run a controller-owned dispatch and finalize its v2 receipt after child exit."""
     session_dir, run_dir = Path(session_dir).resolve(), Path(run_dir).resolve()
     if type(retry_count) is not int or retry_count not in (0, 1): raise ValueError("retry_count must be 0 or 1")
     if type(turn_cap) is not int or turn_cap <= 0: raise ValueError("turn_cap must be positive")
+    if game_id not in {"dnd_combat", "delve"}: raise ValueError("unsupported game_id")
     if type(is_holdout) is not bool: raise ValueError("is_holdout must be explicit bool")
     if persona_prompt_text is None and persona_text is None: raise ValueError("persona_prompt_text must be supplied explicitly")
     if retry_count and not retry_of: raise ValueError("retry requires retry_of")
@@ -253,15 +257,15 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     else:
         if holdout_prompt_text is not None: raise ValueError("public runs cannot receive holdout text")
         holdout_sha = None
-    prompt = build_prompt(persona_text if persona_text is not None else persona, turn_cap)
+    prompt = build_prompt(persona_text if persona_text is not None else persona, turn_cap, game_id)
     if prompt_path:
         prompt = Path(prompt_path).read_text(encoding="utf-8") + "\n\n" + prompt
     prompt_hash = _sha(prompt)
     actual_prompt_file = run_dir / "prompt.txt"; actual_prompt_file.write_text(prompt, encoding="utf-8")
     argv = list(golem_cmd) if golem_cmd is not None else codex_golem_argv(model, effort, actual_prompt_file)
-    start = _game_manifest(); revision = git_revision(repo_root)
+    start = _game_manifest(game_id) if game_id == "delve" else _game_manifest(); revision = git_revision(repo_root)
     measurement = measurement_policy
-    code, _, setup_error = _run_play(["new", "--seed", str(seed), "--name", name, "--class", character,
+    code, _, setup_error = _run_play(["new", "--game", game_id, "--seed", str(seed), "--name", name, "--class", character,
         "--persona", persona, "--session", str(session_dir), "--run-id", run_id, "--session-id", session_id,
         "--persona-prompt", persona_prompt_text, "--turn-cap", str(turn_cap), "--measurement-policy", measurement,
         "--is-holdout", str(is_holdout).lower(),
@@ -305,8 +309,10 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                     rows = load_transcript(session_dir / "transcript.jsonl"); record = rows[-1]
                     after = record["snapshot"]; turns += 1
                     no_progress = no_progress + 1 if before.get("canonical_state_hash") == after.get("canonical_state_hash") and before.get("room_id") == after.get("room_id") else 0
-                    if after.get("game_state") == "won": game_termination, stop_reason = "won", "won"
-                    elif after.get("game_state") == "dead": game_termination, stop_reason = "dead", "dead"
+                    terminal = (after.get("game_state") if game_id == "dnd_combat" else after.get("terminal"))
+                    if terminal in {"won", "victory"}: game_termination, stop_reason = "won", "won"
+                    elif terminal in {"dead", "death"}: game_termination, stop_reason = "dead", "dead"
+                    elif terminal == "quit": game_termination, stop_reason = "quit", "player_stop"
                     elif no_progress >= 3: stop_reason = "no_progress"
                     elif turns >= turn_cap: stop_reason = "cap"
                     _controller_reply(capsule / "outbox" / inbox.name, {"output": output, "turn": turns,
@@ -346,7 +352,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     recognized_types = {"item.completed", "item.started", "turn.completed", "response.completed",
                         "session.created", "thread.started", "command", "tool_call"}
     recognized = bool(events) and any(isinstance(event, dict) and event.get("type") in recognized_types for event in events)
-    hits = audit_commands(events, capsule, session_dir)
+    hits = audit_commands(events, capsule, session_dir, game_id)
     rows = load_transcript(session_dir / "transcript.jsonl")
     stdout_data, stderr_data = (run_dir / "stdout.log").read_bytes(), (run_dir / "stderr.log").read_bytes()
     journal_bytes = journal_path.read_bytes()
@@ -356,7 +362,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
         journal_consistent = len(journal_rows) == turns and [item["turn_id"] for item in journal_rows] == list(range(1, turns + 1))
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
         journal_rows, journal_consistent = [], False
-    end = _game_manifest()
+    end = _game_manifest(game_id) if game_id == "delve" else _game_manifest()
     audit_status = "VIOLATED" if hits else "CLEAN" if recognized else "UNVERIFIABLE"
     if start["game"] != end["game"] or start["harness"] != end["harness"]: outcome = "GAME_MODIFIED_DURING_RUN"
     elif hits: outcome = "BLINDNESS_VIOLATED"
@@ -367,7 +373,9 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     elif not journal_consistent: outcome = "INCOMPLETE_DISPATCH"
     else: outcome = "COMPLETE"
     receipt = {
-        "schema_version": SCHEMA_VERSION, "run_id": run_id, "session_id": session_id,
+        "schema_version": SCHEMA_VERSION, "schema_minor": SCHEMA_MINOR, "game_id": game_id,
+        "game_entrypoint": GAME_ENTRYPOINTS[game_id], "game_tree_spec": GAME_TREE_SPECS[game_id],
+        "run_id": run_id, "session_id": session_id,
         "manifest_sha256": manifest["manifest_sha256"], "game_revision": revision,
         "harness_revision": revision, "game_files_start": start["game"]["files"],
         "harness_files_start": start["harness"]["files"], "game_sha": start["game"]["sha256"],

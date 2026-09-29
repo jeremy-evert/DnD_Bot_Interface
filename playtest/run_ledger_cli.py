@@ -61,6 +61,7 @@ def _normalize_detectors(records, instances, run_dir):
 def _verify_receipt_binding(receipt, manifest, records, journal_sha, run, journal):
     mismatch = []
     identities = (
+        ("game_id", receipt.get("game_id", "dnd_combat"), manifest.get("game_id", "dnd_combat")),
         ("run_id", receipt["run_id"], manifest["run_id"]),
         ("session_id", receipt["session_id"], manifest["session_id"]),
         ("manifest_sha256", receipt["manifest_sha256"], manifest["manifest_sha256"]),
@@ -82,9 +83,10 @@ def _verify_receipt_binding(receipt, manifest, records, journal_sha, run, journa
         ("severity_taxonomy_version", receipt["severity_taxonomy_version"], manifest["severity_taxonomy_version"]),
     )
     mismatch.extend(name for name, actual, expected in identities if actual != expected)
-    if receipt["game_files_start"] != manifest["game_files"] or source_digest("game", receipt["game_files_start"]) != receipt["game_sha"]: mismatch.append("game_files")
+    game_id = manifest.get("game_id", "dnd_combat")
+    if receipt["game_files_start"] != manifest["game_files"] or source_digest("game", receipt["game_files_start"], game_id) != receipt["game_sha"]: mismatch.append("game_files")
     if receipt["harness_files_start"] != manifest["harness_files"] or source_digest("harness", receipt["harness_files_start"]) != receipt["harness_sha"]: mismatch.append("harness_files")
-    if receipt["game_files_end"] != manifest["game_files"] or source_digest("game", receipt["game_files_end"]) != receipt["game_sha_end"]: mismatch.append("game_files_end")
+    if receipt["game_files_end"] != manifest["game_files"] or source_digest("game", receipt["game_files_end"], game_id) != receipt["game_sha_end"]: mismatch.append("game_files_end")
     if receipt["harness_files_end"] != manifest["harness_files"] or source_digest("harness", receipt["harness_files_end"]) != receipt["harness_sha_end"]: mismatch.append("harness_files_end")
     if not records or records[0]["manifest_sha256"] != manifest["manifest_sha256"]: mismatch.append("transcript_manifest_sha256")
     if receipt["transcript_head_chain_hash"] != records[-1]["chain_hash"]: mismatch.append("transcript_head_chain_hash")
@@ -120,7 +122,10 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
     if not audit_path.exists() or _sha(audit_path.read_bytes()) != receipt["audit_log_sha256"]: mismatches.append("audit_log_sha256")
     actual_head = records[-1]["chain_hash"] if records else None
     outcome = receipt["run_outcome"]
-    instances = run_all(records, journal)
+    game_id = manifest.get("game_id", "dnd_combat")
+    detector_result = run_all(records, journal, game_id=game_id)
+    detector_set_status = "IMPLEMENTED" if isinstance(detector_result, list) else detector_result["status"]
+    instances = detector_result if isinstance(detector_result, list) else detector_result["instances"]
     verify_instance_quotes(records, instances)
     normalized = _normalize_detectors(records, instances, run_dir)
     judge_instances, judge_status = None, "NOT_REQUESTED"
@@ -198,7 +203,8 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
         verified_instances=normalized + (judge_instances or []),
         discarded_judge_claims=discarded, curiosity=curiosity_events(records), coverage=facts,
         content_catalog=manifest["content_catalog"], eligibility_flags=eligibility,
-        expected_content_change=None)
+        expected_content_change=None, game_id=game_id, schema_minor=manifest.get("schema_minor", 0),
+        detector_set_status=detector_set_status)
 
 
 def main(argv=None):

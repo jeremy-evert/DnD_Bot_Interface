@@ -1,4 +1,8 @@
 import random
+import json
+import os
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -65,6 +69,31 @@ class PlaytestHarnessTests(unittest.TestCase):
         random.seed(5678)
         second = replay(29, calls).output
         self.assertEqual(first, second)
+
+    def test_delve_uses_real_state_and_is_repeatable_across_hash_seeds(self):
+        calls = ["f", "a", "a", "a", "look"]
+        before = random.getstate()
+        one = replay(41, calls, game_id="delve")
+        two = replay(41, calls, game_id="delve")
+        self.assertIsNone(one.error)
+        self.assertTrue(one.exhausted)
+        self.assertEqual(one.output, two.output)
+        self.assertEqual(snapshot(one.witness, "delve"), snapshot(two.witness, "delve"))
+        self.assertEqual(snapshot(one.witness, "delve")["canonical_state_hash"],
+                         snapshot(two.witness, "delve")["canonical_state_hash"])
+        self.assertEqual(random.getstate(), before)
+        self.assertEqual(type(one.witness).__module__, "delve.state")
+
+        script = ("import json; from playtest.harness import replay, snapshot; "
+                  f"r=replay(41, {calls!r}, game_id='delve'); "
+                  "print(json.dumps([r.output, snapshot(r.witness, 'delve')], sort_keys=True))")
+        outputs = []
+        for hash_seed in ("2", "37"):
+            env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONHASHSEED": hash_seed}
+            result = subprocess.run([sys.executable, "-c", script], env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            outputs.append(result.stdout)
+        self.assertEqual(outputs[0], outputs[1])
 
     def test_replay_invokes_exported_game_main_with_defaults_and_memory_recorder(self):
         original = harness.game_main.main

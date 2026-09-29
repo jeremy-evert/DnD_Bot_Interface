@@ -12,11 +12,12 @@ import unittest
 
 from playtest.judge import run_judge
 from playtest.ledger import verify_ledger
-from playtest.report import compare, render_markdown
+from playtest.report import compare, compare_cross_game, render_markdown
 from playtest.run_ledger_cli import build_entry
-from playtest.schema import (canonical_json, load_manifest, load_run_receipt, strict_json_loads)
+from playtest.schema import (canonical_json, load_manifest, load_run_receipt, strict_json_loads,
+    source_manifest, validate_manifest, validate_run_receipt, validate_ledger_entry, manifest_digest)
 from playtest.transcript import load_transcript
-from playtest.golem_runner import run_golem
+from playtest.golem_runner import audit_commands, run_golem
 
 ROOT = Path(__file__).resolve().parents[1]
 SEALED = "sealed persona text: patient and observant"
@@ -27,17 +28,18 @@ class PlaytestSeamTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def _golem(self, path):
+    def _golem(self, path, game_id="dnd_combat"):
+        frames = (["a"], ["a"], ["a"], ["look"]) if game_id == "delve" else (["attack"], ["attack"], ["move", "east"], ["look"])
         path.write_text(textwrap.dedent('''\
             import json, shlex, subprocess
             print(json.dumps({"type":"command", "command":"./playctl step"}), flush=True)
-            frames = [["attack"], ["attack"], ["move", "east"], ["look"]]
+            frames = FRAMES
             for number, frame in enumerate(frames, 1):
                 subprocess.run("./playctl step " + shlex.quote(json.dumps(frame)), shell=True)
                 note = {"turn_id":number,"wanted":"advance","surprise":"","continue":1,
                         "reason":"The next room may matter.","unsupported_intent":None}
                 subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
-        '''), encoding="utf-8")
+        ''').replace("FRAMES", repr(frames)), encoding="utf-8")
         return [sys.executable, str(path)]
 
     def _judge_command(self, path, candidates):
@@ -51,13 +53,14 @@ class PlaytestSeamTests(unittest.TestCase):
         path.write_text("import json\nprint(json.dumps(" + repr(event) + "), flush=True)\n", encoding="utf-8")
         return [sys.executable, str(path)]
 
-    def _dispatch(self, label, *, holdout=False):
+    def _dispatch(self, label, *, holdout=False, game_id="dnd_combat"):
         session, run = self.root / f"{label}-session", self.root / f"{label}-run"
         receipt = run_golem(session, run, persona="explorer", persona_prompt_text=(SEALED if holdout else "public explorer persona"),
             is_holdout=holdout, holdout_prompt_text=SEALED if holdout else None,
             seed=41, name="Ada", character="fighter", turn_cap=4,
+            game_id=game_id,
             measurement_policy="detector_and_judge" if not holdout else "detector_only",
-            golem_cmd=self._golem(self.root / f"{label}-golem.py"))
+            golem_cmd=self._golem(self.root / f"{label}-golem.py", game_id))
         return session, run, receipt
 
     def _judge(self, session, run, label, candidates):
@@ -98,6 +101,10 @@ class PlaytestSeamTests(unittest.TestCase):
             self.assertEqual(receipt["turn_cap"], 4); self.assertEqual(receipt["stop_reason"], "cap")
             self.assertFalse(receipt["is_holdout"]); self.assertIsNone(receipt["holdout_prompt_sha256"])
             self.assertEqual(manifest["game_sha"], receipt["game_sha"])
+            self.assertEqual(manifest["game_id"], "dnd_combat")
+            self.assertEqual(manifest["game_id"], receipt["game_id"])
+            self.assertEqual(manifest["game_tree_spec"], receipt["game_tree_spec"])
+            self.assertTrue(all(row["game_sha"] == manifest["game_sha"] for row in records))
             self.assertEqual(manifest["harness_sha"], receipt["harness_sha"])
             self.assertEqual(manifest["game_revision"], receipt["game_revision"])
             self.assertEqual(manifest["harness_revision"], receipt["harness_revision"])
@@ -143,6 +150,9 @@ class PlaytestSeamTests(unittest.TestCase):
         self.assertEqual(left_entry["discarded_judge_claims"], 1)
         self.assertEqual(left_entry["per_mode_verified_instances"]["judge"]["FALSE_AFFORDANCE"], 1)
         self.assertEqual(left_entry["game_sha"], left_manifest["game_sha"])
+        self.assertEqual(left_entry["game_id"], "dnd_combat")
+        self.assertEqual(left_entry["game_tree_spec"], left_manifest["game_tree_spec"])
+        self.assertEqual(left_entry["detector_set_status"], "IMPLEMENTED")
         self.assertEqual(left_entry["harness_sha"], left_manifest["harness_sha"])
         static = [item for item in left_entry["verified_instances"] if item["evidence_kind"] == "static_probe"]
         self.assertTrue(static)
@@ -226,6 +236,101 @@ class PlaytestSeamTests(unittest.TestCase):
         self.assertEqual(zero_entry["judge_counted_instances"], 0)
         self.assertEqual(incomplete_entry["judge_status"], "INCOMPLETE")
         self.assertIsNone(incomplete_entry["judge_counted_instances"])
+
+    def test_delve_game_identity_tree_and_descriptive_cross_game_contract(self):
+        # Verify the exact real-game action script before dispatch; it reaches four action frames.
+        from playtest.harness import replay
+        result = replay(41, ["f", "a", "a", "a", "look"], game_id="delve")
+        self.assertIsNone(result.error)
+        self.assertTrue(result.exhausted)
+        self.assertEqual(result.consumed, 5)
+        self.assertEqual(result.witness.snapshot()["room_id"], "mossy_entry")
+
+        session, run, receipt = self._dispatch("delve", game_id="delve")
+        manifest = load_manifest(session / "manifest.json")
+        records = load_transcript(session / "transcript.jsonl")
+        self.assertEqual([row["frame_kind"] for row in records], ["setup", "action", "action", "action", "action"])
+        self.assertEqual(records[0]["input_calls"], ["f"])
+        self.assertEqual(manifest["name"], "Delver")
+        self.assertEqual(manifest["game_id"], "delve")
+        self.assertEqual(manifest["game_entrypoint"], "delve.__main__")
+        self.assertEqual(manifest["game_tree_spec"], "delve/**/*.{py,json}")
+        self.assertEqual(receipt["game_id"], "delve")
+        self.assertEqual(receipt["game_sha"], manifest["game_sha"])
+        self.assertEqual(receipt["game_files_start"], manifest["game_files"])
+        self.assertTrue(all(row["game_sha"] == manifest["game_sha"] for row in records))
+        self.assertTrue(any(path["path"].endswith(".json") for path in manifest["game_files"]))
+        self.assertEqual(audit_commands([{"text": "Delve opens before you."}], game_id="delve"), [])
+        self.assertTrue(audit_commands([{"path": "delve/state.py"}], game_id="delve"))
+        judge = self._judge(session, run, "delve", [])
+        ledger_path = self.root / "delve-ledger.jsonl"
+        entry = self._add(session, run, ledger_path, run / "delve-judge/judge_receipt.json")
+        self.assertEqual(judge["judge_outcome"], "COMPLETE")
+        self.assertEqual(entry["game_id"], "delve")
+        self.assertEqual(entry["game_sha"], manifest["game_sha"])
+        self.assertEqual(entry["detector_set_status"], "NOT_IMPLEMENTED")
+        self.assertFalse(entry["eligibility"]["comparison_eligible"])
+        self.assertEqual(entry["eligibility"]["reason_code"], "DETECTORS_NOT_IMPLEMENTED_FOR_GAME")
+        from playtest.detectors import run_all, DETECTORS_NOT_IMPLEMENTED_FOR_GAME
+        marker = run_all(records, game_id="delve")
+        self.assertEqual(marker["marker"], DETECTORS_NOT_IMPLEMENTED_FOR_GAME)
+        self.assertEqual(marker["status"], "NOT_IMPLEMENTED")
+        self.assertIsInstance(marker, dict)  # An empty [] would be indistinguishable from zero failures.
+
+        base_session, base_run, _ = self._dispatch("baseline")
+        self._judge(base_session, base_run, "baseline", [])
+        baseline_ledger = self.root / "baseline-ledger.jsonl"
+        dnd_entry = self._add(base_session, base_run, baseline_ledger,
+                              base_run / "baseline-judge/judge_receipt.json")
+        self.assertEqual(compare([dnd_entry], [entry])["paired_count"], 0)
+        cross_spec = {"baseline_game_sha": dnd_entry["game_sha"], "candidate_game_sha": entry["game_sha"],
+                      "baseline_game_id": "dnd_combat", "candidate_game_id": "delve",
+                      "permitted_changes": ["M1 map, command grammar, and engine"]}
+        cross = compare_cross_game([dnd_entry], [entry], cross_spec)
+        self.assertEqual(cross["paired_count"], 1)
+        self.assertEqual(cross["mode_rate_deltas"], None)
+        self.assertEqual(cross["label"], "CROSS_GAME: not like-for-like; descriptive only; no improvement claim")
+        with self.assertRaisesRegex(ValueError, "spec"):
+            compare_cross_game([dnd_entry], [entry], {"baseline_game_id": "dnd_combat"})
+
+        # A raw JSON change under delve/content must affect the game tree digest.
+        shadow = self.root / "shadow"
+        shutil.copytree(ROOT / "delve", shadow / "delve")
+        before = source_manifest(shadow, "game", "delve")["sha256"]
+        content = next((shadow / "delve" / "content").glob("*.json"))
+        content.write_bytes(content.read_bytes() + b" ")
+        after = source_manifest(shadow, "game", "delve")["sha256"]
+        self.assertNotEqual(before, after)
+
+        # A v2.1 manifest with its game_id silently removed is malformed.
+        dropped = dict(manifest); dropped.pop("game_id")
+        with self.assertRaises(ValueError):
+            validate_manifest(dropped)
+
+        # Schema 2.0 D&D artifacts load as baseline and cannot pair with v2.1 entries.
+        legacy_manifest = dict(dnd_entry)
+        legacy_manifest.pop("prev_hash", None); legacy_manifest.pop("entry_hash", None)
+        for field in ("schema_minor", "game_id", "game_entrypoint", "game_tree_spec", "detector_set_status"):
+            legacy_manifest.pop(field, None)
+        self.assertIsNone(validate_ledger_entry(legacy_manifest))
+        self.assertEqual(compare([legacy_manifest], [dnd_entry])["paired_count"], 0)
+        old_manifest = dict(load_manifest(base_session / "manifest.json"))
+        for field in ("schema_minor", "game_id", "game_entrypoint", "game_tree_spec"):
+            old_manifest.pop(field, None)
+        old_manifest["manifest_sha256"] = manifest_digest(old_manifest)
+        old_manifest_path = self.root / "schema-v2.0-manifest.json"
+        old_manifest_path.write_text(canonical_json(old_manifest) + "\n", encoding="utf-8")
+        loaded_old_manifest = load_manifest(old_manifest_path)
+        self.assertEqual(loaded_old_manifest["game_id"], "dnd_combat")
+        self.assertEqual(loaded_old_manifest["schema_minor"], 0)
+        old_receipt = dict(load_run_receipt(base_run / "run_receipt.json"))
+        for field in ("schema_minor", "game_id", "game_entrypoint", "game_tree_spec"):
+            old_receipt.pop(field, None)
+        old_receipt_path = self.root / "schema-v2.0-receipt.json"
+        old_receipt_path.write_text(canonical_json(old_receipt) + "\n", encoding="utf-8")
+        loaded_old_receipt = load_run_receipt(old_receipt_path)
+        self.assertEqual(loaded_old_receipt["game_id"], "dnd_combat")
+        self.assertEqual(loaded_old_receipt["game_tree_spec"], "dnd_combat/*.py")
 
 
 if __name__ == "__main__":

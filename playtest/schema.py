@@ -15,8 +15,12 @@ import subprocess
 from typing import Any, Literal
 
 SCHEMA_VERSION = 2
+SCHEMA_MINOR = 1
 LEGACY_VERSION = 1
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+GAME_IDS = {"dnd_combat", "delve"}
+GAME_ENTRYPOINTS = {"dnd_combat": "dnd_combat.__main__", "delve": "delve.__main__"}
+GAME_TREE_SPECS = {"dnd_combat": "dnd_combat/*.py", "delve": "delve/**/*.{py,json}"}
 
 
 @dataclass(frozen=True)
@@ -28,9 +32,25 @@ class LegacyArtifact:
     eligible: bool = False
 
 
+class GameCompatibleDict(dict):
+    """Expose v2.0's implicit D&D identity without changing its stored bytes."""
+    _defaults = {"schema_minor": 0, "game_id": "dnd_combat",
+                 "game_entrypoint": "dnd_combat.__main__",
+                 "game_tree_spec": "dnd_combat/*.py", "detector_set_status": "IMPLEMENTED"}
+
+    def __getitem__(self, key):
+        if key not in self and key in self._defaults: return self._defaults[key]
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key not in self and key in self._defaults: return self._defaults[key]
+        return super().get(key, default)
+
+
 @dataclass(frozen=True)
 class Manifest:
-    schema_version: int; run_id: str; session_id: str; persona_id: str
+    schema_version: int; schema_minor: int; game_id: str; game_entrypoint: str; game_tree_spec: str
+    run_id: str; session_id: str; persona_id: str
     persona_prompt_sha256: str; seed: int; is_holdout: bool
     holdout_prompt_sha256: str | None; narrator_policy: str; turn_policy: str
     turn_cap: int; measurement_policy: str; severity_taxonomy_version: str; game_revision: str | None
@@ -49,7 +69,8 @@ class TranscriptRecord:
 
 @dataclass(frozen=True)
 class RunReceipt:
-    schema_version: int; run_id: str; session_id: str; manifest_sha256: str
+    schema_version: int; schema_minor: int; game_id: str; game_entrypoint: str; game_tree_spec: str
+    run_id: str; session_id: str; manifest_sha256: str
     game_revision: str | None; harness_revision: str | None
     game_files_start: list[dict]; harness_files_start: list[dict]
     game_sha: str; harness_sha: str; game_files_end: list[dict]
@@ -86,7 +107,8 @@ class VerifiedInstance:
 
 @dataclass(frozen=True)
 class LedgerEntry:
-    schema_version: int; run_id: str; session_id: str; manifest_sha256: str
+    schema_version: int; schema_minor: int; game_id: str; game_entrypoint: str; game_tree_spec: str
+    detector_set_status: str; run_id: str; session_id: str; manifest_sha256: str
     run_receipt_sha256: str; transcript_head_chain_hash: str; journal_sha256: str
     game_revision: str | None; harness_revision: str | None; game_sha: str; harness_sha: str
     persona_id: str; persona_prompt_sha256: str; seed: int; is_holdout: bool
@@ -164,7 +186,8 @@ def _typed(value, spec, label):
 
 FILE_SPEC = {"path": str, "sha256": str}
 MANIFEST_FIELDS = {
-    "schema_version": int, "run_id": str, "session_id": str, "persona_id": str,
+    "schema_version": int, "schema_minor": int, "game_id": str, "game_entrypoint": str, "game_tree_spec": str,
+    "run_id": str, "session_id": str, "persona_id": str,
     "persona_prompt_sha256": str, "seed": int, "is_holdout": bool,
     "holdout_prompt_sha256": (str, type(None)), "narrator_policy": str,
     "turn_policy": str, "turn_cap": int, "measurement_policy": str,
@@ -188,7 +211,8 @@ LEGACY_TRANSCRIPT_FIELDS = {
     "game_sha": str, "harness_sha": str,
 }
 RUN_RECEIPT_FIELDS = {
-    "schema_version": int, "run_id": str, "session_id": str, "manifest_sha256": str,
+    "schema_version": int, "schema_minor": int, "game_id": str, "game_entrypoint": str, "game_tree_spec": str,
+    "run_id": str, "session_id": str, "manifest_sha256": str,
     "game_revision": (str, type(None)), "harness_revision": (str, type(None)),
     "game_files_start": list, "harness_files_start": list, "game_sha": str,
     "harness_sha": str, "game_files_end": list, "harness_files_end": list,
@@ -222,7 +246,8 @@ JUDGE_RECEIPT_FIELDS = {
     "discarded_judge_claims": int, "judge_outcome": str,
 }
 LEDGER_ENTRY_FIELDS = {
-    "schema_version": int, "run_id": str, "session_id": str, "manifest_sha256": str,
+    "schema_version": int, "schema_minor": int, "game_id": str, "game_entrypoint": str, "game_tree_spec": str,
+    "detector_set_status": str, "run_id": str, "session_id": str, "manifest_sha256": str,
     "run_receipt_sha256": str, "transcript_head_chain_hash": str, "journal_sha256": str,
     "game_revision": (str, type(None)),
     "harness_revision": (str, type(None)), "game_sha": str, "harness_sha": str,
@@ -280,13 +305,41 @@ def _validate_version(value, fields, label):
     if type(version) is not int: raise ValueError(f"{label}.schema_version must be an integer")
     if version != SCHEMA_VERSION:
         raise ValueError(f"unsupported {label} schema_version")
-    _typed(value, fields, label)
+    # Schema 2.0 artifacts remain readable with their original byte identity.
+    # Their absent game identity is interpreted as the frozen D&D baseline.
+    identity_fields = {"schema_minor", "game_id", "game_entrypoint", "game_tree_spec", "detector_set_status"}
+    if "game_id" not in value and "game_id" in fields:
+        _typed(value, {key: spec for key, spec in fields.items() if key not in identity_fields}, label)
+    else:
+        _typed(value, fields, label)
     return None
+
+
+def _game_identity(value):
+    game_id = value.get("game_id", "dnd_combat")
+    if game_id not in GAME_IDS: raise ValueError("unsupported game_id")
+    if value.get("schema_minor", 0) not in {0, SCHEMA_MINOR}: raise ValueError("unsupported schema_minor")
+    if value.get("game_entrypoint", GAME_ENTRYPOINTS[game_id]) != GAME_ENTRYPOINTS[game_id]:
+        raise ValueError("game_entrypoint does not match game_id")
+    if value.get("game_tree_spec", GAME_TREE_SPECS[game_id]) != GAME_TREE_SPECS[game_id]:
+        raise ValueError("game_tree_spec does not match game_id")
+    return game_id
+
+
+def _validate_game_paths(files, game_id, label):
+    prefix = game_id + "/"
+    for item in files:
+        path = item["path"]
+        if not path.startswith(prefix): raise ValueError(f"{label} path is outside declared game tree")
+        suffix = Path(path).suffix
+        allowed = suffix == ".py" if game_id == "dnd_combat" else suffix in {".py", ".json"}
+        if not allowed: raise ValueError(f"{label} path does not match game_tree_spec")
 
 
 def validate_manifest(value):
     legacy = _validate_version(value, MANIFEST_FIELDS, "manifest")
     if legacy: return legacy
+    game_id = _game_identity(value)
     if not all(value[k] for k in ("run_id", "session_id", "persona_id", "name", "character_class")):
         raise ValueError("manifest identity strings must not be empty")
     if value["narrator_policy"] != "plain" or value["turn_policy"] != "action_frames_v1": raise ValueError("unsupported manifest policy")
@@ -299,9 +352,10 @@ def validate_manifest(value):
     if value["holdout_prompt_sha256"] is not None: _digest(value["holdout_prompt_sha256"], "manifest.holdout_prompt_sha256")
     _revision(value["game_revision"], "manifest.game_revision"); _revision(value["harness_revision"], "manifest.harness_revision")
     _validate_files(value["game_files"], "manifest.game_files"); _validate_files(value["harness_files"], "manifest.harness_files")
+    _validate_game_paths(value["game_files"], game_id, "manifest.game_files")
     validate_content_catalog(value["content_catalog"])
     if value["manifest_sha256"] != manifest_digest(value): raise ValueError("manifest digest mismatch")
-    if value["game_sha"] != source_digest("game", value["game_files"]): raise ValueError("manifest game_sha mismatch")
+    if value["game_sha"] != source_digest("game", value["game_files"], game_id): raise ValueError("manifest game_sha mismatch")
     if value["harness_sha"] != source_digest("harness", value["harness_files"]): raise ValueError("manifest harness_sha mismatch")
 
 
@@ -312,7 +366,7 @@ def validate_transcript_record(value):
     if value["frame_kind"] == "setup" and (value["turn_id"] != 0 or value["frame_id"] != 0): raise ValueError("setup frame ids must be 0/0")
     if value["frame_kind"] == "action" and (value["turn_id"] < 1 or value["frame_id"] < 1): raise ValueError("action frame ids must be positive")
     if any(not isinstance(x, str) for x in value["input_calls"]): raise ValueError("input_calls must contain strings")
-    if value["termination"] not in {"playing", "won", "dead", "error"}: raise ValueError("invalid transcript termination")
+    if value["termination"] not in {"playing", "won", "dead", "quit", "error"}: raise ValueError("invalid transcript termination")
     for key in ("manifest_sha256", "full_output_sha256", "prev_chain_hash", "chain_hash", "game_sha", "harness_sha"):
         _digest(value[key], "transcript." + key)
 
@@ -320,18 +374,21 @@ def validate_transcript_record(value):
 def validate_run_receipt(value):
     legacy = _validate_version(value, RUN_RECEIPT_FIELDS, "run receipt")
     if legacy: return legacy
+    game_id = _game_identity(value)
     _validate_files(value["game_files_start"], "run_receipt.game_files_start"); _validate_files(value["harness_files_start"], "run_receipt.harness_files_start")
     _validate_files(value["game_files_end"], "run_receipt.game_files_end"); _validate_files(value["harness_files_end"], "run_receipt.harness_files_end")
-    if source_digest("game", value["game_files_start"]) != value["game_sha"]: raise ValueError("run receipt start game digest mismatch")
+    _validate_game_paths(value["game_files_start"], game_id, "run_receipt.game_files_start")
+    _validate_game_paths(value["game_files_end"], game_id, "run_receipt.game_files_end")
+    if source_digest("game", value["game_files_start"], game_id) != value["game_sha"]: raise ValueError("run receipt start game digest mismatch")
     if source_digest("harness", value["harness_files_start"]) != value["harness_sha"]: raise ValueError("run receipt start harness digest mismatch")
-    if source_digest("game", value["game_files_end"]) != value["game_sha_end"]: raise ValueError("run receipt end game digest mismatch")
+    if source_digest("game", value["game_files_end"], game_id) != value["game_sha_end"]: raise ValueError("run receipt end game digest mismatch")
     if source_digest("harness", value["harness_files_end"]) != value["harness_sha_end"]: raise ValueError("run receipt end harness digest mismatch")
     for field in ("manifest_sha256", "game_sha", "harness_sha", "game_sha_end", "harness_sha_end", "persona_prompt_sha256", "transcript_head_chain_hash", "stdout_sha256", "stderr_sha256", "journal_sha256", "audit_log_sha256", "prompt_sha256"):
         _digest(value[field], "run_receipt." + field)
     if value["holdout_prompt_sha256"] is not None: _digest(value["holdout_prompt_sha256"], "run_receipt.holdout_prompt_sha256")
     _revision(value["game_revision"], "run_receipt.game_revision"); _revision(value["harness_revision"], "run_receipt.harness_revision")
     if value["stop_reason"] not in {"won", "dead", "cap", "no_progress", "player_stop", "timeout", "child_exit_error", "ipc_error", "game_error", "premature_exit"}: raise ValueError("invalid stop_reason")
-    if value["termination"] not in {"playing", "won", "dead", "error"}: raise ValueError("invalid termination")
+    if value["termination"] not in {"playing", "won", "dead", "quit", "error"}: raise ValueError("invalid termination")
     if value["run_outcome"] not in {"COMPLETE", "INCOMPLETE_DISPATCH", "BLINDNESS_VIOLATED", "AUDIT_UNVERIFIABLE", "GAME_MODIFIED_DURING_RUN", "ERROR"}: raise ValueError("invalid run_outcome")
     if value["audit_status"] not in {"CLEAN", "VIOLATED", "UNVERIFIABLE"}: raise ValueError("invalid audit_status")
     if value["severity_taxonomy_version"] != SEVERITY_TAXONOMY_VERSION: raise ValueError("unsupported severity taxonomy version")
@@ -393,6 +450,8 @@ def validate_judge_receipt(value):
 def validate_ledger_entry(value):
     legacy = _validate_version(value, LEDGER_ENTRY_FIELDS, "ledger entry")
     if legacy: return legacy
+    _game_identity(value)
+    if value.get("detector_set_status", "IMPLEMENTED") not in {"IMPLEMENTED", "NOT_IMPLEMENTED"}: raise ValueError("invalid detector_set_status")
     for field in ("manifest_sha256", "run_receipt_sha256", "transcript_head_chain_hash", "journal_sha256", "game_sha", "harness_sha", "persona_prompt_sha256", "catalog_sha256"): _digest(value[field], "ledger." + field)
     _revision(value["game_revision"], "ledger.game_revision"); _revision(value["harness_revision"], "ledger.harness_revision")
     if value["turn_cap"] <= 0 or value["turns"] < 0 or value["transcript_record_count"] != value["turns"] + 1: raise ValueError("invalid ledger turn counts")
@@ -423,31 +482,43 @@ def validate_ledger_entry(value):
         raise ValueError("judge_counted_instances mismatch")
     if value["turns"] == 0 and value["eligibility"].get("comparison_eligible") is True:
         raise ValueError("zero-action run cannot be comparison eligible")
+    if value.get("detector_set_status", "IMPLEMENTED") == "NOT_IMPLEMENTED" and (
+            value["eligibility"].get("comparison_eligible") is True or
+            value["eligibility"].get("reason_code") != "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"):
+        raise ValueError("unimplemented detector set cannot be comparison eligible")
 
 
-def source_manifest(root, kind):
+def source_manifest(root, kind, game_id="dnd_combat"):
     """Return sorted raw-byte source identity for one repository subtree."""
     if kind not in {"game", "harness"}: raise ValueError("kind must be game or harness")
+    if game_id not in GAME_IDS: raise ValueError("unsupported game_id")
     root = Path(root).resolve()
-    directory = root / ("dnd_combat" if kind == "game" else "playtest")
+    directory = root / (game_id if kind == "game" else "playtest")
     files = []
     if directory.is_symlink(): raise ValueError(f"source symlink rejected: {directory}")
     if directory.exists():
         for path in directory.rglob("*"):
             if path.is_symlink(): raise ValueError(f"source symlink rejected: {path}")
-            if path.suffix == ".py" and path.is_file():
+            allowed = path.suffix == ".py" if (kind == "harness" or game_id == "dnd_combat") else path.suffix in {".py", ".json"}
+            if allowed and path.is_file():
                 files.append({"path": path.relative_to(root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     files.sort(key=lambda item: item["path"])
-    return {"kind": kind, "files": files, "sha256": source_digest(kind, files)}
+    return {"kind": kind, "game_id": game_id if kind == "game" else None, "files": files,
+            "sha256": source_digest(kind, files, game_id)}
 
 
-def source_digest(kind, files):
+def source_digest(kind, files, game_id="dnd_combat"):
     if kind not in {"game", "harness"}: raise ValueError("kind must be game or harness")
+    if game_id not in GAME_IDS: raise ValueError("unsupported game_id")
     ordered = sorted((dict(item) for item in files), key=lambda item: item.get("path", ""))
     for item in ordered:
         _typed(item, FILE_SPEC, "source file"); _digest(item["sha256"], "source file sha256")
     if len({item["path"] for item in ordered}) != len(ordered): raise ValueError("source file paths must be unique")
     payload = {"kind": kind, "version": 1, "files": ordered}
+    # Preserve the frozen 0.6 digest recipe; Delve identities bind the tree rule.
+    if kind == "game" and game_id == "delve":
+        payload = {"kind": kind, "version": 2, "game_id": game_id,
+                   "game_tree_spec": GAME_TREE_SPECS[game_id], "files": ordered}
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -477,7 +548,8 @@ def load_manifest(path):
     value = strict_json_loads(raw)
     marker = validate_manifest(value)
     if marker is None and raw != canonical_json(value) + "\n": raise ValueError("manifest serialization is not canonical")
-    return marker if marker else value
+    if marker: return marker
+    return GameCompatibleDict(value) if "game_id" not in value else value
 
 
 def load_run_receipt(path):
@@ -485,7 +557,8 @@ def load_run_receipt(path):
     value = strict_json_loads(raw)
     marker = validate_run_receipt(value)
     if marker is None and raw != canonical_json(value) + "\n": raise ValueError("run receipt serialization is not canonical")
-    return marker if marker else value
+    if marker: return marker
+    return GameCompatibleDict(value) if "game_id" not in value else value
 
 
 def load_judge_receipt(path):
@@ -501,7 +574,8 @@ def load_ledger_entry(path):
     value = strict_json_loads(raw)
     marker = validate_ledger_entry(value)
     if marker is None and raw != canonical_json(value) + "\n": raise ValueError("ledger entry serialization is not canonical")
-    return marker if marker else value
+    if marker: return marker
+    return GameCompatibleDict(value) if "game_id" not in value else value
 
 
 def load_artifact(path, validator):
@@ -524,8 +598,16 @@ def normalize_instance(*, source, mode, turn_ids, quote, rationale, evidence_kin
     return core
 
 
-def content_catalog(snapshot):
+def content_catalog(snapshot, game_id="dnd_combat"):
     """Build a stable catalog from the controller's actual initial world snapshot."""
+    if game_id == "delve":
+        # M1's snapshot deliberately contains persistent run state, not its static pack.
+        # Record only the starting room as observed coverage; do not invent map facts.
+        room_id = snapshot.get("room_id") if isinstance(snapshot, dict) else None
+        if not isinstance(room_id, str) or not room_id: raise ValueError("initial snapshot has no room identity")
+        return {"catalog_version": 1, "room_ids": [room_id], "objects": [],
+                "encounter_ids": [], "exits": [], "initial_reachability": [room_id]}
+    if game_id != "dnd_combat": raise ValueError("unsupported game_id")
     rooms = snapshot.get("rooms") if isinstance(snapshot, dict) else None
     if not isinstance(rooms, dict): raise ValueError("initial snapshot has no room catalog")
     room_ids = sorted(rooms)

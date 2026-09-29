@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import importlib
 import io
 import json
 import random
@@ -45,13 +46,14 @@ class MemoryRecorder:
         )
 
 
-def replay(seed: int, input_calls: list[str], narrator=None) -> ReplayResult:
+def replay(seed: int, input_calls: list[str], narrator=None, game_id="dnd_combat") -> ReplayResult:
     """Run real ``main`` with isolated dice, terminal I/O, and memory state."""
-    rng = random.Random(seed)
+    if game_id not in {"dnd_combat", "delve"}: raise ValueError("unsupported game_id")
+    rng = random.Random(seed) if game_id == "dnd_combat" else None
     answers = iter(input_calls)
     consumed = 0
     captured = io.StringIO()
-    witnesses: list[RealAdventure] = []
+    witnesses = []
 
     def terminal_input(prompt: str = "") -> str:
         nonlocal consumed
@@ -64,22 +66,24 @@ def replay(seed: int, input_calls: list[str], narrator=None) -> ReplayResult:
         captured.write(f"{answer}\n")
         return answer
 
-    def make_adventure(hero):
-        game = RealAdventure(hero)
-        witnesses.append(game)
-        return game
-
     error = None
     exhausted = False
-    with patch("builtins.input", side_effect=terminal_input), \
-         patch("sys.stdout", captured), \
-         patch.object(game_main, "Adventure", side_effect=make_adventure):
+    with patch("builtins.input", side_effect=terminal_input), patch("sys.stdout", captured):
         try:
-            game_main.main(
-                roller=lambda sides: rng.randint(1, sides),
-                narrator=narrator if narrator is not None else PlainNarrator(),
-                recorder=MemoryRecorder(),
-            )
+            if game_id == "dnd_combat":
+                def make_adventure(hero):
+                    game = RealAdventure(hero); witnesses.append(game); return game
+                with patch.object(game_main, "Adventure", side_effect=make_adventure):
+                    game_main.main(roller=lambda sides: rng.randint(1, sides),
+                        narrator=narrator if narrator is not None else PlainNarrator(), recorder=MemoryRecorder())
+            else:
+                delve_main = importlib.import_module("delve.__main__")
+                delve_state = importlib.import_module("delve.state")
+                real_new = delve_state.DelveState.new
+                def make_state(*args, **kwargs):
+                    state = real_new(*args, **kwargs); witnesses.append(state); return state
+                with patch.object(delve_state.DelveState, "new", side_effect=make_state):
+                    delve_main.main(["--seed", str(seed)])
         except InputsExhausted:
             exhausted = True
         except Exception as exc:
@@ -89,8 +93,10 @@ def replay(seed: int, input_calls: list[str], narrator=None) -> ReplayResult:
                         exhausted, error, consumed)
 
 
-def snapshot(witness: RealAdventure) -> dict:
+def snapshot(witness, game_id="dnd_combat") -> dict:
     """Return canonical, JSON-safe state for a real Adventure witness."""
+    if game_id == "delve": return witness.snapshot()
+    if game_id != "dnd_combat": raise ValueError("unsupported game_id")
     hero = witness.hero
     rooms = {}
     for room_id, room in sorted(witness.rooms.items()):

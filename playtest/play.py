@@ -10,7 +10,7 @@ import secrets
 import sys
 
 from . import harness
-from .schema import (SCHEMA_VERSION, SEVERITY_TAXONOMY_VERSION, canonical_json, content_catalog, git_revision,
+from .schema import (SCHEMA_VERSION, SCHEMA_MINOR, GAME_ENTRYPOINTS, GAME_TREE_SPECS, SEVERITY_TAXONOMY_VERSION, canonical_json, content_catalog, git_revision,
                      manifest_digest, source_manifest, strict_json_loads,
                      validate_manifest)
 from .transcript import ReplayDivergence, TranscriptWriter, load_transcript
@@ -48,11 +48,22 @@ def _read_frames(session_dir):
     return frames
 
 
+def _replay_calls(manifest, frames):
+    if manifest.get("game_id", "dnd_combat") == "delve":
+        setup = [{"fighter": "f", "rogue": "r", "wizard": "w"}[manifest["character_class"]]]
+    else:
+        setup = [manifest["name"], manifest["character_class"]]
+    return setup + [call for frame in frames[1:] for call in frame]
+
+
 def _record(writer, manifest, calls, frame_kind, turn_id, full_output, result):
     witness = result.witness
-    state = harness.snapshot(witness) if witness is not None else {}
+    game_id = manifest.get("game_id", "dnd_combat")
+    state = harness.snapshot(witness, game_id) if witness is not None else {}
     termination = ("error" if result.error else
-                   state.get("game_state") if state.get("game_state") in {"won", "dead"} else "playing")
+                   ("won" if state.get("game_state") == "won" else state.get("game_state")
+                    if state.get("game_state") in {"dead"} else "playing") if game_id == "dnd_combat" else
+                   {"victory": "won", "death": "dead", "quit": "quit"}.get(state.get("terminal"), "playing"))
     previous = load_transcript(writer.path) if writer.path.exists() else []
     prior_output = "".join(entry["new_output"] for entry in previous)
     if not full_output.startswith(prior_output): raise ReplayDivergence("REPLAY_DIVERGENCE: replay output changed its previous prefix")
@@ -74,9 +85,11 @@ def _new(args):
     # Session paths need not be inside the checkout; source identity is rooted at this module.
     from pathlib import Path as _Path
     repo_root = _Path(__file__).resolve().parent.parent
-    game, harness_source = source_manifest(repo_root, "game"), source_manifest(repo_root, "harness")
-    setup_calls = [args.name, args.character]
-    result = harness.replay(args.seed, setup_calls)
+    game_id = args.game
+    game, harness_source = source_manifest(repo_root, "game", game_id), source_manifest(repo_root, "harness")
+    setup_calls = ([args.name, args.character] if game_id == "dnd_combat" else
+                   [{"fighter":"f", "rogue":"r", "wizard":"w"}[args.character]])
+    result = harness.replay(args.seed, setup_calls, game_id=game_id)
     if result.error:
         print(f"game error: {result.error}", file=sys.stderr); return 2
     run_id = args.run_id or secrets.token_hex(16)
@@ -88,9 +101,13 @@ def _new(args):
         holdout_hash = holdout_hash or prompt_hash
     elif holdout_hash is not None:
         raise ValueError("public session cannot carry holdout prompt identity")
-    snapshot = harness.snapshot(result.witness)
+    snapshot = harness.snapshot(result.witness, game_id)
+    stored_name = args.name if game_id == "dnd_combat" else "Delver"
+    stored_class = args.character if game_id == "dnd_combat" else args.character
     manifest = {
-        "schema_version": SCHEMA_VERSION, "run_id": run_id,
+        "schema_version": SCHEMA_VERSION, "schema_minor": SCHEMA_MINOR,
+        "game_id": game_id, "game_entrypoint": GAME_ENTRYPOINTS[game_id],
+        "game_tree_spec": GAME_TREE_SPECS[game_id], "run_id": run_id,
         "session_id": args.session_id, "persona_id": args.persona,
         "persona_prompt_sha256": prompt_hash, "seed": args.seed,
         "is_holdout": is_holdout, "holdout_prompt_sha256": holdout_hash,
@@ -100,9 +117,9 @@ def _new(args):
         "game_revision": git_revision(repo_root), "harness_revision": git_revision(repo_root),
         "game_files": game["files"], "harness_files": harness_source["files"],
         "game_sha": game["sha256"], "harness_sha": harness_source["sha256"],
-        "manifest_sha256": "", "name": args.name, "character_class": args.character,
+        "manifest_sha256": "", "name": stored_name, "character_class": stored_class,
         "created_by": "controller", "created_at": datetime.now(timezone.utc).isoformat(),
-        "content_catalog": content_catalog(snapshot),
+        "content_catalog": content_catalog(snapshot, game_id),
     }
     manifest["manifest_sha256"] = manifest_digest(manifest)
     try:
@@ -127,15 +144,15 @@ def _step(args):
         writer = TranscriptWriter(session_dir)
         previous = load_transcript(writer.path)
         if not previous: raise ValueError("session has no initial transcript frame")
-        if previous[-1]["termination"] in {"won", "dead", "error"}:
+        if previous[-1]["termination"] in {"won", "dead", "quit", "error"}:
             print("session has ended", file=sys.stderr); return 3
         calls = strict_json_loads(args.inputs_json)
         if not isinstance(calls, list) or any(not isinstance(call, str) for call in calls): raise ValueError("--inputs-json must be a JSON array of strings")
         action_count = sum(record["frame_kind"] == "action" for record in previous)
         if action_count >= manifest["turn_cap"]: raise ValueError("turn cap already reached")
         frames = _read_frames(session_dir) + [calls]
-        result = harness.replay(manifest["seed"], [manifest["name"], manifest["character_class"],
-                                                   *[call for frame in frames[1:] for call in frame]])
+        result = harness.replay(manifest["seed"], _replay_calls(manifest, frames),
+                                game_id=manifest.get("game_id", "dnd_combat"))
         if result.error: raise ValueError(f"game error: {result.error}")
         prior_output = "".join(record["new_output"] for record in previous)
         if not result.output.startswith(prior_output): raise ReplayDivergence("REPLAY_DIVERGENCE: replay output changed its previous prefix")
@@ -153,6 +170,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m playtest.play")
     commands = parser.add_subparsers(dest="command", required=True)
     new = commands.add_parser("new")
+    new.add_argument("--game", choices=("dnd_combat", "delve"), default="dnd_combat")
     new.add_argument("--seed", required=True, type=int); new.add_argument("--name", required=True)
     new.add_argument("--class", dest="character", required=True, choices=("fighter", "rogue", "wizard"))
     new.add_argument("--persona", required=True); new.add_argument("--session", required=True)

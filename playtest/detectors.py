@@ -64,7 +64,14 @@ DEATH_CONTENT_TERMS = (
 DEATH_BOILERPLATE = ("you have fallen", "you die", "the adventure ends here")
 
 
-def run_all(records, journal=None, content=None):
+DETECTORS_NOT_IMPLEMENTED_FOR_GAME = "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"
+
+
+def run_all(records, journal=None, content=None, game_id="dnd_combat"):
+    if game_id == "delve":
+        return {"status": "NOT_IMPLEMENTED", "marker": DETECTORS_NOT_IMPLEMENTED_FOR_GAME,
+                "instances": []}
+    if game_id != "dnd_combat": raise ValueError("unsupported game_id")
     out = []
     journal_rows = journal or []
     if isinstance(journal_rows, dict):
@@ -195,13 +202,21 @@ def curiosity_events(records):
         old_inventory = before.get("inventory", [])
         if any(item not in old_inventory for item in after.get("inventory", [])):
             earned += 1; continue
+        if any(item not in before.get("known_clues", []) for item in after.get("known_clues", [])):
+            earned += 1; continue
+        if any(item not in before.get("flags", []) for item in after.get("flags", [])):
+            earned += 1; continue
         old_rooms, new_rooms = before.get("rooms", {}), after.get("rooms", {})
         if any(new_rooms.get(key, {}).get("exits") != room.get("exits") for key, room in old_rooms.items()):
             earned += 1; continue
         if any(room.get("enemy", {}).get("alive") and not new_rooms.get(key, {}).get("enemy", {}).get("alive") for key, room in old_rooms.items() if room.get("enemy")):
             earned += 1
     callback = sum(bool(re.search(r"remember|recognizes|again|remains", r["new_output"], re.I)) for r in records)
-    return {"DISCOVERY": len(entered), "EARNED_CONSEQUENCE": earned, "CALLBACK": callback, "turns": count_turns(records)}
+    clues = {clue for r in records for clue in r["snapshot"].get("known_clues", [])}
+    flags = {flag for r in records for flag in r["snapshot"].get("flags", [])}
+    return {"DISCOVERY": len(entered), "EARNED_CONSEQUENCE": earned, "CALLBACK": callback,
+            "rooms_visited": len(entered), "distinct_clues": len(clues),
+            "distinct_flags": len(flags), "turns": count_turns(records)}
 
 
 def session_facts(records):

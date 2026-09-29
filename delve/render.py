@@ -33,11 +33,18 @@ def _canonical_slots(slots):
 
 def select_variant(bank_entry, seed, event_key, fact_slots, memory):
     """Choose a matching bank line, cycling without repeats for this event/slots."""
-    slots = dict(fact_slots or {})
+    supplied = dict(fact_slots or {})
     declared = tuple(_get(bank_entry, "fact_slots", ()))
+    slots = {name: supplied[name] for name in declared if name in supplied}
     variants = tuple(_get(bank_entry, "variants", ()))
     fallback = _get(bank_entry, "fallback", "")
-    eligible = list(variants) if set(declared) == set(slots) else []
+    missing = set(declared) - set(slots)
+    if missing:
+        memory.problems.append(
+            f"{event_key}: missing declared slots {', '.join(sorted(missing))}"
+        )
+        return fallback
+    eligible = list(variants)
     if not eligible:
         return fallback
     canonical = _canonical_slots(slots)

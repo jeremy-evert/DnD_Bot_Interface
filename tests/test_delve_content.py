@@ -14,10 +14,10 @@ PACK_PATH = Path(__file__).parents[1] / 'delve' / 'content' / 'mossy_fast_slice.
 DATA = json.loads(PACK_PATH.read_text(encoding='utf-8'))
 OLD_OBJECTS = {'clapperless bell', 'stone compass', 'star chart', 'clay cup', 'silver leaf', 'offering bowl', 'brass nameplate'}
 HOT_KEYS = {
-    'room.enter', 'room.return', 'attack.hit', 'attack.miss', 'enemy.intent',
+    'room.enter', 'room.return', 'attack.hit', 'attack.miss', 'enemy.defeated',
     'intent.goblin.grab', 'intent.goblin.strike', 'intent.captain.guard', 'intent.captain.smash',
-    'shove.success', 'shove.fail', 'brace.success', 'throw.interrupt', 'hazard.trigger',
-    'clue.reveal', 'clue.mira', 'clue.chart', 'clue.dome', 'item.get', 'item.use', 'get.blocked',
+    'shove.success', 'shove.fail', 'brace.success', 'throw.leaf', 'throw.cup', 'hazard.trigger',
+    'clue.reveal', 'clue.mira', 'clue.chart', 'clue.dome', 'item.get', 'item.use.bowl', 'get.blocked',
 }
 # D&D is a vocabulary label in authored feedback; Ada is the hero slot.
 PROPER_ALLOWLIST = {'HP', 'D&D', 'Ada', 'Mira', 'The', 'Your', 'A', 'Both', 'One', 'Back', 'Fresh'}
@@ -70,7 +70,7 @@ class DelveContentTests(unittest.TestCase):
                 emitted = engine.apply(action)
                 for event in emitted:
                     self.assertIn(event.key, bank_map(), event.key)
-                    self.assertEqual(set(event.fact_slots), set(bank_map()[event.key]['fact_slots']), event.key)
+                    self.assertTrue(set(bank_map()[event.key]['fact_slots']) <= set(event.fact_slots), event.key)
                     transcript.append(render_event(event, pack, seed, memory))
                     events.append(event)
             self.assertEqual(memory.problems, [])
@@ -91,6 +91,8 @@ class DelveContentTests(unittest.TestCase):
         self.assertEqual(state.terminal, 'victory')
         self.assertEqual(set(state.known_clues), {'mira_route', 'chart_route', 'dome_route'})
         self.assertEqual(sum(event.key == 'fact.payoff' for event in events), 1)
+        self.assertEqual(sum(event.key == 'enemy.defeated' and event.fact_slots.get('enemy_name') == 'Goblin' for event in events), 1)
+        self.assertEqual(sum(event.key == 'enemy.defeated' and event.fact_slots.get('enemy_name') == 'Hobgoblin Captain' for event in events), 1)
         self.assertIn('hazard.trigger', [event.key for event in events])
         self.assertEqual(len(winning_actions), 21)
         print(f'Winning route actions used: {len(winning_actions)}')
@@ -103,6 +105,74 @@ class DelveContentTests(unittest.TestCase):
         blind, blind_events, _ = run(1, blind_actions)
         self.assertFalse(blind.known_facts)
         self.assertTrue(blind.player['hp'] < blind.player['max_hp'] or blind.terminal == 'dead')
+
+    def test_scripted_event_bank_coverage_renders_variants_without_problems(self):
+        pack = load_engine_ready_pack(PACK_PATH)
+        bank = bank_map()
+        all_events = []
+        def collect(state, engine, actions):
+            out = []
+            for action in actions:
+                out.extend(engine.apply(action))
+                if state.terminal != 'playing': break
+            all_events.extend(out)
+            return out
+
+        # A complete clue-driven win also contributes terminal and hazard paths.
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack,state)
+        win_actions = [Action('attack','goblin') for _ in range(6)] + [
+            Action('get','brass_ring_obj'), Action('move',direction='east'),
+            Action('move',direction='south'), Action('use','brass_ring'), Action('look','mira'),
+            Action('move',direction='north'), Action('look','collapsed_dome'),
+            Action('move',direction='east'), Action('look','star_chart'), Action('move',direction='north'),
+            Action('attack','captain'), Action('brace'), Action('attack','captain'),
+            Action('shove','captain'), Action('attack','captain'),
+        ]
+        collect(state,engine,win_actions)
+        self.assertEqual(state.terminal,'victory')
+
+        # Death by each enemy, including all three death slots supplied by Engine.
+        for room_id, enemy_id in (('mossy_entry','goblin'), ('hollow_vault','captain')):
+            state = DelveState.new(pack, 1, 'wizard'); state.room_id = room_id
+            engine = Engine(pack,state)
+            collect(state,engine,[Action('attack',enemy_id) for _ in range(8)])
+            self.assertEqual(state.terminal, 'dead')
+
+        # A normal four-step patrol route applies the fourth-step damage after its line.
+        state = DelveState.new(pack, 1, 'fighter'); state.room_id = 'collapsed_observatory'
+        state.clocks['patrol'] = 3; hp_before = state.player['hp']; engine = Engine(pack,state)
+        events = collect(state,engine,[Action('move',direction='east')])
+        keys = [event.key for event in events]
+        self.assertIn('clock.threshold.patrol.4', keys)
+        self.assertEqual(state.player['hp'], hp_before - 4)
+
+        # Collect reachable throw and bowl events from regular room/inventory play.
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack,state)
+        for _ in range(6): engine.apply(Action('attack','goblin'))
+        for action in (Action('move',direction='east'), Action('move',direction='south'),
+                       Action('get','silver_leaf_obj'), Action('move',direction='north'),
+                       Action('move',direction='east'), Action('move',direction='north'),
+                       Action('throw','silver_leaf')):
+            all_events.extend(engine.apply(action))
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack,state)
+        state.room_id = 'collapsed_observatory'; state.player['hp'] = 10
+        all_events.extend(engine.apply(Action('get','offering_bowl')))
+        all_events.extend(engine.apply(Action('use','offering_bowl_item')))
+
+        rendered = RenderMemory()
+        probe_entries = []
+        for entry in pack.bank:
+            probe_entries.append({'key':entry.key,'fact_slots':list(entry.fact_slots),
+                                  'variants':list(entry.variants),
+                                  'fallback':'__FALLBACK_ONLY__ ' + ' '.join('{{'+slot+'}}' for slot in entry.fact_slots)})
+        probe_pack = {'bank':{'entries':probe_entries}}
+        self.assertTrue(all_events)
+        for event in all_events:
+            self.assertIn(event.key, bank, event.key)
+            self.assertTrue(set(bank[event.key]['fact_slots']) <= set(event.fact_slots), event.key)
+            line = render_event(event, probe_pack, 1, rendered)
+            self.assertFalse(line.startswith('__FALLBACK_ONLY__'), event.key)
+        self.assertEqual(rendered.problems, [])
 
     def test_exact_five_named_rooms(self):
         self.assertEqual({r['id'] for r in DATA['rooms']}, {
@@ -124,8 +194,7 @@ class DelveContentTests(unittest.TestCase):
         ring = next(i for i in DATA['items'] if i['id'] == 'brass_ring')
         self.assertEqual(ring['reader']['when_room_id'], 'mira_gallery')
         self.assertEqual(ring['reader']['effects'], [{'type': 'set_flag', 'flag_id': 'ring_given', 'value': True}])
-        self.assertIn('Mira', bank_map()['room.gallery']['variants'][0])
-        self.assertIn('wants it', bank_map()['room.gallery']['variants'][0])
+        self.assertEqual(mira['reader']['event_key'], 'object.read')
         for clue in selected:
             changed = copy.deepcopy(DATA)
             changed['truth']['facts'][0]['clue_ids'].remove(clue['id'])
@@ -147,10 +216,82 @@ class DelveContentTests(unittest.TestCase):
         self.assertEqual(objects['brass_ring_obj']['item_id'], 'brass_ring')
         self.assertEqual(objects['clay_cup_obj']['item_id'], 'clay_cup')
         self.assertEqual(objects['silver_leaf_obj']['item_id'], 'silver_leaf')
+        items = {item['id']: item for item in DATA['items']}
+        self.assertEqual(items['clay_cup']['throw_tags'], ['interrupt_smash'])
+        self.assertEqual(items['silver_leaf']['throw_tags'], ['interrupt_guard'])
+        self.assertEqual(items['clay_cup']['reader']['event_key'], 'throw.cup')
+        self.assertEqual(items['silver_leaf']['reader']['event_key'], 'throw.leaf')
+        self.assertEqual(bank_map()['throw.cup']['fact_slots'], ['item_name'])
+        self.assertEqual(bank_map()['throw.leaf']['fact_slots'], ['item_name'])
+        expected_look_keys = {
+            'brass_ring_obj':'object.ring', 'collapsed_dome':'object.dome',
+            'clapperless_bell':'object.bell', 'stone_compass':'object.compass',
+            'star_chart':'object.chart', 'clay_cup_obj':'object.cup',
+            'silver_leaf_obj':'object.leaf', 'offering_bowl':'object.bowl',
+            'brass_nameplate':'object.nameplate',
+        }
+        for object_id, key in expected_look_keys.items():
+            self.assertEqual(objects[object_id]['reader']['event_key'], key)
         bank = bank_map()
         for key in ('get.blocked', 'get.not_takeable', 'use.nothing'):
             self.assertGreaterEqual(len(bank[key]['variants']), 4, key)
             self.assertTrue(bank[key]['fallback'].strip())
+
+    def test_pickups_are_reachable_before_combat_and_bowl_is_consumable(self):
+        by_room = {room['id']: room for room in DATA['rooms']}
+        room_for = {obj['id']: room['id'] for room in DATA['rooms'] for obj in room['objects']}
+        self.assertEqual(room_for['clay_cup_obj'], 'chart_chamber')
+        self.assertEqual(room_for['silver_leaf_obj'], 'mira_gallery')
+        self.assertEqual(room_for['offering_bowl'], 'collapsed_observatory')
+        for room_id in ('chart_chamber', 'mira_gallery', 'collapsed_observatory'):
+            self.assertFalse(any(e['room_id'] == room_id for e in DATA['enemies']))
+        for object_id, key in [('clay_cup_obj','object.cup'), ('silver_leaf_obj','object.leaf'),
+                               ('offering_bowl','object.bowl')]:
+            obj = next(o for r in DATA['rooms'] for o in r['objects'] if o['id'] == object_id)
+            self.assertEqual(obj['reader']['event_key'], key)
+        bowl = next(i for i in DATA['items'] if i['id'] == 'offering_bowl_item')
+        self.assertTrue(bowl['consumed_on_use'])
+        self.assertEqual(bowl['reader']['effects'], [{'type':'heal','target':'player','amount':8}])
+        self.assertNotIn('when_room_id', bowl['reader'])
+
+        pack = load_engine_ready_pack(PACK_PATH)
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack, state)
+        state.room_id = 'collapsed_observatory'
+        state.player['hp'] = 10
+        engine.apply(Action('get','offering_bowl'))
+        events = engine.apply(Action('use','offering_bowl_item'))
+        self.assertEqual(state.player['hp'], 18)
+        self.assertIn('item.use.bowl', [e.key for e in events])
+        self.assertNotIn('offering_bowl_item', state.inventory)
+        again = engine.apply(Action('use','offering_bowl_item'))
+        self.assertEqual(state.player['hp'], 18)
+        self.assertNotIn('item.use.bowl', [e.key for e in again])
+
+    def test_leaf_interrupts_guard_and_cup_interrupts_smash_in_play(self):
+        pack = load_engine_ready_pack(PACK_PATH)
+        def clear_goblin(state, engine):
+            for _ in range(6): engine.apply(Action('attack','goblin'))
+        # The cycle starts at guard. Taking the leaf to the vault strips that guard.
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack,state); clear_goblin(state,engine)
+        engine.apply(Action('move',direction='east')); engine.apply(Action('move',direction='south'))
+        engine.apply(Action('get','silver_leaf_obj')); engine.apply(Action('move',direction='north'))
+        engine.apply(Action('move',direction='east')); engine.apply(Action('move',direction='north'))
+        events = engine.apply(Action('throw','silver_leaf'))
+        self.assertIn('throw.leaf', [e.key for e in events])
+        self.assertIn('intent.cancelled', [e.key for e in events])
+        self.assertEqual(state.enemies['captain']['current_intent_id'], 'smash')
+        self.assertEqual(state.inventory, [])
+
+        # A cup in the chart chamber is available before entering the Captain's room.
+        state = DelveState.new(pack, 1, 'fighter'); engine = Engine(pack,state); clear_goblin(state,engine)
+        engine.apply(Action('move',direction='east')); engine.apply(Action('move',direction='east'))
+        engine.apply(Action('get','clay_cup_obj')); engine.apply(Action('move',direction='north'))
+        engine.apply(Action('brace'))  # guard resolves harmlessly; smash is now declared
+        self.assertEqual(state.enemies['captain']['current_intent_id'], 'smash')
+        events = engine.apply(Action('throw','clay_cup'))
+        self.assertIn('throw.cup', [e.key for e in events])
+        self.assertIn('intent.cancelled', [e.key for e in events])
+        self.assertEqual(state.enemies['captain']['current_intent_id'], 'guard')
 
     def test_patrol_clock_has_direct_and_full_sweep_routes(self):
         patrol = next(c for c in DATA['clocks'] if c['id'] == 'patrol')
@@ -159,7 +300,8 @@ class DelveContentTests(unittest.TestCase):
         alert, caught = patrol['thresholds']
         self.assertEqual(alert['effects'], [{'type': 'set_flag', 'flag_id': 'patrol_alert', 'value': True}])
         self.assertEqual(caught['effects'], [{'type': 'damage', 'target': 'player', 'amount': 4}])
-        self.assertIn('clock.caught', bank_map())
+        self.assertIn('clock.threshold.patrol.4', bank_map())
+        self.assertIn('clock.threshold.patrol.2', bank_map())
         graph = {r['id']: {e['to_room_id'] for e in r['exits']} for r in DATA['rooms']}
         direct = ['mossy_entry', 'collapsed_observatory', 'chart_chamber', 'hollow_vault']
         self.assertTrue(all(b in graph[a] for a, b in zip(direct, direct[1:])))

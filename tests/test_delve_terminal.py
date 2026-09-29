@@ -40,10 +40,24 @@ class DelveTerminalTests(unittest.TestCase):
         code, output = self.play(self.winning_script(), seed=1)
         self.assertEqual(code, 0)
         self.assertIn("VAULT CLEARED", output)
-        self.assertIn("Mira folds her arms", output)
-        self.assertIn("You find the tell in collapsed dome", output)
-        self.assertIn("marked star sits directly above", output)
-        self.assertIn("You know it now", output)
+        bank = {entry.key: entry for entry in self.pack.bank}
+        for key in ('clue.mira', 'clue.dome', 'clue.chart'):
+            self.assertTrue(any(line in output for line in bank[key].variants), key)
+
+    def test_patrol_four_line_precedes_lower_hp_status(self):
+        actions = [''] + ['attack'] * 6 + ['east', 'east', 'west', 'east', 'q']
+        code, output = self.play(actions, seed=1, extra_args=('--class', 'fighter'))
+        self.assertEqual(code, 0)
+        entry = next(e for e in self.pack.bank if e.key == 'clock.threshold.patrol.4')
+        line = next((v.replace('{{clock_label}}','PATROL').replace('{{at}}','4')
+                     for v in entry.variants
+                     if v.replace('{{clock_label}}','PATROL').replace('{{at}}','4') in output), None)
+        self.assertIsNotNone(line)
+        headers = [i for i, text in enumerate(output.splitlines()) if text.startswith('CHART CHAMBER [near]  HP')]
+        self.assertTrue(headers)
+        after_hit = output[output.index(line):]
+        self.assertIn('CHART CHAMBER [near]  HP', after_hit)
+        self.assertIn('HP 5/24', after_hit)
 
     def test_conventional_forms_parse_without_followup_direction_prompt(self):
         state = DelveState.new(self.pack, 1, "fighter")

@@ -68,6 +68,33 @@ class DelveRenderTests(unittest.TestCase):
         self.assertEqual(line, "safe ")
         self.assertTrue(memory.problems)
 
+    def test_extra_event_slots_do_not_force_death_fallback(self):
+        data = copy.deepcopy(self.data)
+        entry = next(e for e in data['bank']['entries'] if e['key'] == 'terminal.death')
+        entry['fact_slots'] = ['cause']
+        entry['variants'] = ['VARIANT: {{cause}}']
+        entry['fallback'] = 'FALLBACK: {{cause}}'
+        pack = load_pack(data)
+        memory = RenderMemory()
+        line = render_event({
+            'key': 'terminal.death',
+            'fact_slots': {'cause': 'the patrol', 'cause_enemy': '', 'cause_intent': ''},
+        }, pack, 9, memory)
+        self.assertEqual(line, 'VARIANT: the patrol')
+        self.assertEqual(memory.problems, [])
+
+    def test_missing_declared_slot_uses_fallback_and_records_problem(self):
+        data = copy.deepcopy(self.data)
+        entry = next(e for e in data['bank']['entries'] if e['key'] == 'terminal.death')
+        entry['fact_slots'] = ['cause']
+        entry['variants'] = ['VARIANT: {{cause}}']
+        entry['fallback'] = 'FALLBACK: {{cause}}'
+        pack = load_pack(data)
+        memory = RenderMemory()
+        line = render_event({'key': 'terminal.death', 'fact_slots': {}}, pack, 9, memory)
+        self.assertEqual(line, 'FALLBACK: ')
+        self.assertTrue(any('missing declared slots cause' in problem for problem in memory.problems))
+
     def test_event_replacement_is_deterministic(self):
         event = {"key":"object.read","fact_slots":{"object_name":"bell"}}
         a, b = RenderMemory(), RenderMemory()

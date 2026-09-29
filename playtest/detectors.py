@@ -52,6 +52,14 @@ CONTRADICTION_RULES = [
     {"terms": ("hidden door",), "exit_target": "sanctum", "description": "hidden"},
 ]
 
+# Small wording-independent hints. These are cues, not a semantic model; longer
+# explanatory terminal text is also treated as cause/retry/carry-over content.
+DEATH_CONTENT_TERMS = (
+    "retry", "try", "again", "because", "killed by", "fell to", "cause",
+    "next time", "hint", "carry", "remember", "your fault", "struck by",
+)
+DEATH_BOILERPLATE = ("you have fallen", "you die", "the adventure ends here")
+
 
 def run_all(records, journal=None, content=None):
     out = []
@@ -130,12 +138,19 @@ def run_all(records, journal=None, content=None):
         r = decisions[-1]; _add(out, "DOMINANT_ACTION", r, "Your turn.", "At least five hero combat decisions; attack share is at least 90%.", 3)
     if len(decisions) >= 5 and attacks / len(decisions) >= .8:
         r = decisions[-1]; _add(out, "DOMINANT_ACTION_SOFT", r, "Your turn.", "At least five hero combat decisions; attack share is at least 80%.", 1)
-    if records and records[-1]["termination"] == "dead":
+    if records and (records[-1]["termination"] == "dead"
+                    or records[-1].get("snapshot", {}).get("game_state") == "dead"):
         r = records[-1]
         lines = r["new_output"].splitlines()
-        death = next((i for i, line in enumerate(lines) if "You have fallen" in line), None)
-        terminal = "\n".join(lines[death:]).strip() if death is not None else ""
-        if terminal and not re.search(r"retry|because|cause|you were|killed by|try again|carry|remember", terminal, re.I):
+        combat_lines = [i for i, line in enumerate(lines) if " rolls " in line]
+        terminal = "\n".join(lines[combat_lines[-1] + 1:] if combat_lines else lines).strip()
+        non_boilerplate = terminal.lower()
+        for phrase in DEATH_BOILERPLATE:
+            non_boilerplate = non_boilerplate.replace(phrase, " ")
+        non_boilerplate = " ".join(non_boilerplate.split())
+        has_content = (any(term in non_boilerplate.lower() for term in DEATH_CONTENT_TERMS)
+                       or len(non_boilerplate) >= 40)
+        if terminal and not has_content:
             _add(out, "FAIL_WITH_NOTHING", r, terminal, "Death message gives no cause, retry path, or carry-over.", 3)
     out.extend(probe_conventions())
     return out

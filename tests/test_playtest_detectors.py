@@ -74,6 +74,34 @@ class DetectorTests(unittest.TestCase):
         clean = fixtures.clean_death()
         self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(clean)})
 
+    def test_death_detection_uses_state_and_structural_terminal_message(self):
+        for wording in ("You die. The adventure ends here.",
+                        "Your journey stops here.",
+                        "The last light goes out."):
+            rows = fixtures.death_wording_real_harness(wording)
+            self.assertIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(rows)})
+        for wording in ("The captain killed you because you ignored the warning.",
+                        "Fall here, then try again next time with a shield.",
+                        "Your friends carry the map onward after you fall.",
+                        "The campaign ends before you can learn what waited beyond the sealed gate."):
+            rows = fixtures.death_wording_real_harness(wording)
+            self.assertNotIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(rows)})
+
+    def test_death_terminal_message_follows_last_combat_resolution(self):
+        rows = fixtures.death_wording(
+            "Your story ends.",
+            prefix="Earlier cause: a trap.\nHero rolls 4 (1) and misses Goblin.\n")
+        self.assertIn("FAIL_WITH_NOTHING", {x["mode"] for x in run_all(rows)})
+
+    def test_noise_cases_on_real_transcripts(self):
+        cases = fixtures.real_noise_cases()
+        self.assertEqual(set(cases), {"combat_extra_input", "full_hp_potion"})
+        extra = {x["mode"] for x in run_all(cases["combat_extra_input"])}
+        potion = {x["mode"] for x in run_all(cases["full_hp_potion"])}
+        # This pilot frame really is an invalid extra combat input and should fire.
+        self.assertIn("UNRECOGNIZED_COMMAND", extra)
+        self.assertNotIn("NO_CONSEQUENCE_STALL", potion)
+
     def test_convention_clash(self):
         rows = fixtures.clean_route()
         item = next(x for x in run_all(rows) if x["mode"] == "CONVENTION_CLASH")

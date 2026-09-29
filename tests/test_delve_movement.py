@@ -1,9 +1,11 @@
 import copy
+from dataclasses import replace
 import json
 import random
 import re
 import sys
 import unittest
+import copy
 from pathlib import Path
 
 from delve.engine import Action, Engine
@@ -18,6 +20,7 @@ def extended_pack():
     d = copy.deepcopy(EXAMPLE)
     d['items'] = [{'id':'key_item','name':'iron key','reader':{'on':'use','event_key':'item.use','when_room_id':'vault','when_flag_id':'unlocked','effects':[{'type':'set_flag','flag_id':'used_key','value':True}]}}]
     d['rooms'][0]['objects'].append({'id':'key_source','name':'iron key','zone':'near','item_id':'key_item','reader':{'on':'look','event_key':'object.read','effects':[]}})
+    d['rooms'][0]['objects'][0]['reader']['effects'].append({'type':'set_flag','flag_id':'unlocked','value':True})
     d['rooms'][0]['exits'][0]['gate']={'kind':'flag','flag_id':'unlocked','denial_event_key':'gate.closed'}
     d['clocks'][0]['thresholds']=[{'at':1,'effects':[{'type':'set_flag','flag_id':'first','value':True}]},{'at':2,'effects':[{'type':'set_flag','flag_id':'second','value':True}]}]
     d['bank']['entries'] += [
@@ -99,6 +102,48 @@ class MovementTests(unittest.TestCase):
         import delve.engine
         newly=set(sys.modules)-imported
         self.assertFalse(any('terminal' in name or 'renderer' in name for name in newly))
+
+    def test_every_invalid_action_preserves_snapshot_including_turn(self):
+        cases = [
+            ('unknown look target', 'entry', 'look', 'missing', None),
+            ('unknown get target', 'entry', 'get', 'missing', None),
+            ('not takeable', 'entry', 'get', 'bell', None),
+            ('unknown item', 'entry', 'use', 'missing', None),
+            ('not usable here', 'entry', 'use', 'key_item', None),
+            ('attack without enemy', 'entry', 'attack', None, None),
+            ('shove without enemy', 'entry', 'shove', None, None),
+            ('brace without enemy', 'entry', 'brace', None, None),
+            ('retreat without enemy', 'entry', 'retreat', None, 'east'),
+            ('unknown verb', 'entry', 'dance', None, None),
+            ('move with bad direction', 'entry', 'move', None, 'up'),
+            ('no exit', 'entry', 'move', None, 'north'),
+        ]
+        for name, room, verb, target, direction in cases:
+            with self.subTest(name=name):
+                state=DelveState.new(self.pack,42,'fighter'); state.room_id=room
+                if verb=='use' and target=='key_item': state.inventory.append('key_item')
+                engine=Engine(self.pack,state)
+                before=copy.deepcopy(state.snapshot())
+                events=engine.apply(Action(verb,target,direction))
+                after=copy.deepcopy(state.snapshot())
+                before.pop('event_log'); before.pop('canonical_state_hash')
+                after.pop('event_log'); after.pop('canonical_state_hash')
+                self.assertEqual(before,after)
+                self.assertEqual(len(events),1)
+
+    def test_blocked_get_preserves_snapshot_including_turn(self):
+        entry=next(r for r in self.pack.rooms if r.id=='entry')
+        vault=next(r for r in self.pack.rooms if r.id=='vault')
+        source=next(o for o in entry.objects if o.id=='key_source')
+        pack=replace(self.pack, rooms=tuple(replace(r,objects=tuple(o for o in r.objects if o.id!='key_source')+(source,))
+                                              if r.id=='vault' else r for r in self.pack.rooms))
+        state=DelveState.new(pack,3,'fighter'); state.room_id='vault'; engine=Engine(pack,state)
+        before=copy.deepcopy(state.snapshot()); events=engine.apply(Action('get','key_source'))
+        after=copy.deepcopy(state.snapshot())
+        before.pop('event_log'); before.pop('canonical_state_hash')
+        after.pop('event_log'); after.pop('canonical_state_hash')
+        self.assertEqual(events[0].key,'get.blocked')
+        self.assertEqual(before,after)
 
 
 if __name__ == '__main__': unittest.main()

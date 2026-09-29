@@ -27,6 +27,28 @@ STRUCTURAL_KEYS = {
     'terminal.retry': 'always', 'terminal.closed': 'always',
 }
 
+# Event keys are a data interface: every slot listed here is supplied by the
+# engine. Pack supplied keys below are added as their owning structures load.
+ENGINE_SLOTS = {
+    'room.enter': {'room_name'}, 'room.return': {'room_name'},
+    'move.blocked': {'enemy_name'}, 'move.no_exit': {'direction'},
+    'target.unknown': {'target'}, 'target.ambiguous': {'target', 'candidates'},
+    'object.read': {'object_name'}, 'inventory': {'items'}, 'help': set(),
+    'terminal.quit': set(), 'parse.unknown_verb': {'verb'},
+    'attack.hit': {'enemy_name', 'damage'}, 'attack.miss': {'margin'},
+    'brace.success': set(), 'brace.wasted': set(), 'shove.success': set(),
+    'shove.fail': set(), 'throw.fizzle': {'item_name'}, 'throw.interrupt': {'item_name'},
+    'enemy.defeated': {'enemy_name'}, 'intent.cancelled': {'enemy_name'},
+    'enemy.hit': {'enemy_name', 'damage'}, 'enemy.miss': {'enemy_name'},
+    'retreat.blocked': set(), 'get.blocked': {'enemy_name'},
+    'get.not_takeable': {'object_name'}, 'item.get': {'item_name'},
+    'use.nothing': set(), 'hazard.trigger': set(), 'fact.payoff': {'fact_label'},
+    'clock.tick': {'clock_label', 'value', 'max'}, 'clock.threshold': {'clock_label', 'at'},
+    'clue.reveal': {'clue_id'}, 'terminal.victory': set(),
+    'terminal.death': {'cause', 'cause_enemy', 'cause_intent'},
+    'terminal.retry': set(), 'terminal.closed': set(),
+}
+
 
 def check_engine_ready(pack) -> None:
     """Require nonempty bank fallbacks for engine event paths in this pack."""
@@ -66,6 +88,39 @@ def check_engine_ready(pack) -> None:
                 missing.append(item.reader.event_key)
     if missing:
         _err('E_BANK_STRUCTURAL_MISSING', '$.bank.entries', 'missing nonempty fallback for: ' + ', '.join(missing))
+    slots = dict(ENGINE_SLOTS)
+    def register(key, supplied):
+        # A repeated content key must be safe for every path that emits it.
+        if key in slots: slots[key] = slots[key] & set(supplied)
+        else: slots[key] = set(supplied)
+    for room in pack.rooms:
+        register(room.description_key, {'room_name'})
+        for exit in room.exits:
+            if exit.gate: register(exit.gate.denial_event_key, set())
+        for obj in room.objects:
+            if obj.reader:
+                register(obj.reader.event_key, {'object_name'})
+    for item in pack.items:
+        register(item.reader.event_key, {'item_name'})
+    for clue in pack.clues:
+        register(clue.event_key, set())
+    for hazard in pack.hazards:
+        register(hazard.event_key, set())
+    for enemy in pack.enemies:
+        for intent in enemy.intents:
+            register(intent.telegraph_key, {'enemy_name'})
+    for terminal in pack.terminals:
+        register(terminal.event_key, {'cause', 'cause_enemy', 'cause_intent'}
+                 if terminal.kind in ('dead', 'death') else set())
+        if terminal.retry_hint_key: register(terminal.retry_hint_key, set())
+    for clock in pack.clocks:
+        for threshold in clock.thresholds:
+            register(f'clock.threshold.{clock.id}.{threshold.at}', {'clock_label', 'at'})
+    for entry in pack.bank:
+        supplied = slots.get(entry.key)
+        if supplied is not None and not set(entry.fact_slots).issubset(supplied):
+            _err('E_BANK_SLOT_UNSUPPLIED', f'bank {entry.key}.fact_slots',
+                 'declared slots are not supplied by the engine for this key')
 
 
 def load_engine_ready_pack(path_or_text_or_dict):
@@ -116,7 +171,7 @@ def _effect(x,p):
       'open_exit':({'type','room_id','direction'},{'direction':m.DIRECTIONS}),'end_run':({'type','state'},{'state':('victory','dead','quit')}),'interrupt_intent':({'type'}, {})}
     req, enums=fields[typ]; _obj(x,p,req)
     for k,vals in enums.items():
-        if x[k] not in vals: _err('E_SCHEMA',p+'.'+k,'unknown vocabulary value')
+        if not isinstance(x[k], str) or x[k] not in vals: _err('E_SCHEMA',p+'.'+k,'unknown vocabulary value')
     kw={'type':typ}
     for k,v in x.items():
         if k=='type': continue
@@ -167,7 +222,11 @@ def _parse(d):
     hazards=[]
     for i,x in enumerate(_arr(d['hazards'],'$.hazards')):
         p=f'$.hazards[{i}]'; _obj(x,p,('id','room_id','zone','tag','event_key','trigger','effects')); t=x['trigger']; _obj(t,p+'.trigger',('action','requires_flag_id'))
-        hazards.append(m.Hazard(_id(x['id'],p+'.id'),_id(x['room_id'],p+'.room_id'),_str(x['zone'],p+'.zone'),_str(x['tag'],p+'.tag'),_key(x['event_key'],p+'.event_key'),dict(t),_effects(x['effects'],p+'.effects')))
+        action=_str(t['action'],p+'.trigger.action')
+        if action not in ('shove','move','enter'): _err('E_SCHEMA',p+'.trigger.action','unknown trigger action')
+        flag=t['requires_flag_id']
+        if flag is not None: flag=_id(flag,p+'.trigger.requires_flag_id')
+        hazards.append(m.Hazard(_id(x['id'],p+'.id'),_id(x['room_id'],p+'.room_id'),_str(x['zone'],p+'.zone'),_str(x['tag'],p+'.tag'),_key(x['event_key'],p+'.event_key'),{'action':action,'requires_flag_id':flag},_effects(x['effects'],p+'.effects')))
     clocks=[]
     for i,x in enumerate(_arr(d['clocks'],'$.clocks')):
         p=f'$.clocks[{i}]'; _obj(x,p,('id','label','max','start','tick_sources','thresholds')); ts=[]
@@ -195,7 +254,7 @@ def _parse(d):
             q=f'{p}.all[{j}]';
             if not isinstance(v,dict) or 'kind' not in v: _err('E_SCHEMA',q,'expected predicate object')
             kind=v['kind']; fields={'enemy_dead':('kind','enemy_id'),'fact_known':('kind','fact_id'),'flag_set':('kind','flag_id'),'clock_at_least':('kind','clock_id','at'),'room_is':('kind','room_id')}
-            if kind not in fields: _err('E_SCHEMA',q+'.kind','unknown predicate')
+            if not isinstance(kind,str) or kind not in fields: _err('E_SCHEMA',q+'.kind','unknown predicate')
             _obj(v,q,fields[kind]); pred=dict(v)
             for k,val in v.items():
                 if k.endswith('_id'): pred[k]=_id(val,q+'.'+k,reserved=(kind=='flag_set' and val=='__player_hp_zero'))
@@ -204,7 +263,10 @@ def _parse(d):
         terms.append(m.Terminal(_id(x['id'],p+'.id'),_str(x['kind'],p+'.kind'),tuple(preds),_key(x['event_key'],p+'.event_key'),_key(x['retry_hint_key'],p+'.retry_hint_key') if 'retry_hint_key' in x else None))
     b=d['bank']; _obj(b,'$.bank',('entries',)); entries=[]
     for i,x in enumerate(_arr(b['entries'],'$.bank.entries')):
-        p=f'$.bank.entries[{i}]'; _obj(x,p,('key','fact_slots','variants','fallback')); entries.append(m.BankEntry(_key(x['key'],p+'.key'),_strings(x['fact_slots'],p+'.fact_slots',lambda a,b:_str(a,b,re.compile(r'^[a-z][a-z0-9_]{0,31}$'))),tuple(_str(y,p+'.variants') for y in _arr(x['variants'],p+'.variants')),_str(x['fallback'],p+'.fallback')))
+        p=f'$.bank.entries[{i}]'
+        _obj(x,p,('key','fact_slots','variants'),('fallback',))
+        if 'fallback' not in x: _err('E_BANK_FALLBACK_MISSING',p+'.fallback','fallback is required')
+        entries.append(m.BankEntry(_key(x['key'],p+'.key'),_strings(x['fact_slots'],p+'.fact_slots',lambda a,b:_str(a,b,re.compile(r'^[a-z][a-z0-9_]{0,31}$'))),tuple(_str(y,p+'.variants') for y in _arr(x['variants'],p+'.variants')),_str(x['fallback'],p+'.fallback')))
     if 'meta' in d and not isinstance(d['meta'],dict): _err('E_SCHEMA','$.meta','expected object')
     return m.Pack(1,_id(d['id'],'$.id'),_str(d['title'],'$.title'),_id(d['start_room_id'],'$.start_room_id'),_strings(d['atmosphere_registry'],'$.atmosphere_registry'),tuple(rooms),tuple(enemies),tuple(hazards),tuple(clocks),tuple(items),tuple(facts),tuple(clues),tuple(terms),tuple(entries),dict(d['meta']) if 'meta' in d else None)
 
@@ -252,6 +314,8 @@ def validate_pack(pack):
     bank={e.key:e for e in pack.bank}
     if len(bank)!=len(pack.bank): _err('E_SCHEMA','$.bank.entries','duplicate bank key')
     for r in pack.rooms:
+        if not r.zones or len(r.zones)!=len(set(r.zones)):
+            _err('E_SCHEMA',f'room {r.id}.zones','zones must be a unique nonempty array')
         for z in r.zones:
             if z not in m.ZONES: _err('E_SCHEMA',f'room {r.id}.zones','unknown zone')
         for e in r.exits:
@@ -265,18 +329,35 @@ def validate_pack(pack):
         if e.room_id not in rooms: _err('E_SCHEMA',f'enemy {e.id}.room_id','unknown room')
         if not {'near','far','doorway'}.issubset(rooms[e.room_id].zones): _err('E_SCHEMA',f'enemy {e.id}.room_id','enemy room must have near/far/doorway zones')
         im={i.id:i for i in e.intents}
+        if not e.intent_cycle: _err('E_SCHEMA',f'enemy {e.id}.intent_cycle','intent cycle must be nonempty')
         if not set(e.intent_cycle)<=im.keys(): _err('E_SCHEMA',f'enemy {e.id}.intent_cycle','unknown intent')
+        if e.start_zone not in rooms[e.room_id].zones: _err('E_SCHEMA',f'enemy {e.id}.start_zone','zone absent from enemy room')
         for i in e.intents:
             if i.type not in m.INTENT_TYPES or i.target_zone not in m.ZONES: _err('E_SCHEMA',f'intent {i.id}','unknown intent vocabulary')
             if i.telegraph_key not in bank: _err('E_INTENT_TELEGRAPH_MISSING',f'intent {i.id}.telegraph_key','missing bank entry')
+            _validate_effects(i.effects,rooms,clues,clocks,objects)
     for h in pack.hazards:
         if h.tag not in m.HAZARD_TAGS: _err('E_HAZARD_TAG_UNKNOWN',f'hazard {h.id}.tag','unknown hazard tag')
         if h.room_id not in rooms: _err('E_SCHEMA',f'hazard {h.id}.room_id','unknown room')
         if 'hazard' not in rooms[h.room_id].zones: _err('E_SCHEMA',f'hazard {h.id}.room_id','hazard room lacks hazard zone')
+        expected_actions={
+            'collapse': {'shove'}, 'fire': {'move','enter'}, 'drop': {'shove'},
+            'noise': {'shove'}, 'cover': {'shove'}, 'unstable_ground': {'shove'},
+        }[h.tag]
+        if h.trigger['action'] not in expected_actions:
+            _err('E_UNSUPPORTED_MECHANIC',f'hazard {h.id}.trigger.action','trigger does not activate this hazard tag')
+        if h.tag == 'collapse' and not any(e.type=='damage' and e.target=='enemy' for e in h.effects):
+            _err('E_UNSUPPORTED_MECHANIC',f'hazard {h.id}.effects','collapse must damage the shoved enemy')
+        if h.tag == 'fire' and not any(e.type=='damage' and e.target=='player' for e in h.effects):
+            _err('E_UNSUPPORTED_MECHANIC',f'hazard {h.id}.effects','fire must damage the entering player')
+        if h.tag == 'noise' and not any(effect.type == 'tick_clock' for effect in h.effects):
+            _err('E_UNSUPPORTED_MECHANIC',f'hazard {h.id}','noise hazard must tick a declared clock')
     for c in pack.clocks:
         if c.start<0 or c.start>c.max: _err('E_CLOCK_THRESHOLD_RANGE',f'clock {c.id}.start','start outside 0..max')
         ats=[t.at for t in c.thresholds]
         if any(a<1 or a>c.max for a in ats) or ats!=sorted(set(ats)): _err('E_CLOCK_THRESHOLD_RANGE',f'clock {c.id}.thresholds','thresholds must increase within 1..max')
+        for threshold in c.thresholds:
+            _validate_effects(threshold.effects,rooms,clues,clocks,objects)
     for obj in list(objects.values()):
         r,o=obj
         if o.reader: _validate_reader(o.reader,rooms,items,clues,clocks,objects,bank,f'object {o.id}')
@@ -313,6 +394,55 @@ def validate_pack(pack):
                 if p['kind']=='room_is' and p['room_id'] not in reachable: possible=False
                 if p['kind']=='enemy_dead' and enemies[p['enemy_id']].room_id not in reachable: possible=False
             if not possible: _err('E_TERMINAL_UNREACHABLE',f'terminal {t.id}','victory predicate cannot be reached')
+    # Every condition that can block a route or clue source must have a
+    # reachable producer. Flags are monotonic capabilities in this milestone.
+    all_effects=[]
+    for room in pack.rooms:
+        for obj in room.objects:
+            if obj.reader: all_effects.extend(obj.reader.effects)
+    for item in pack.items: all_effects.extend(item.reader.effects)
+    for enemy in pack.enemies:
+        for intent in enemy.intents: all_effects.extend(intent.effects)
+    for hazard in pack.hazards: all_effects.extend(hazard.effects)
+    for clock in pack.clocks:
+        for threshold in clock.thresholds: all_effects.extend(threshold.effects)
+    for fact in pack.facts: all_effects.extend(fact.payoff_effects)
+    settable={e.flag_id for e in all_effects if e.type=='set_flag' and e.value is True}
+    settable.add('__player_hp_zero')
+    for room in pack.rooms:
+        for exit in room.exits:
+            opens = any(effect.type=='open_exit' and effect.room_id==room.id and effect.direction==exit.direction
+                        for effect in all_effects)
+            if exit.gate and exit.gate.flag_id not in settable and not opens:
+                _err('E_FLAG_UNSETTABLE',f'room {room.id}.exit.{exit.direction}.gate.flag_id','no effect can set this gate flag')
+        for obj in room.objects:
+            if obj.reader and obj.reader.when_flag_id and obj.reader.when_flag_id not in settable:
+                _err('E_FLAG_UNSETTABLE',f'object {obj.id}.reader.when_flag_id','no effect can set this reader flag')
+    for hazard in pack.hazards:
+        required=hazard.trigger.get('requires_flag_id')
+        if required and required not in settable:
+            _err('E_FLAG_UNSETTABLE',f'hazard {hazard.id}.trigger.requires_flag_id','no effect can set this hazard flag')
+    for item in pack.items:
+        if item.reader.when_flag_id and item.reader.when_flag_id not in settable:
+            _err('E_FLAG_UNSETTABLE',f'item {item.id}.reader.when_flag_id','no effect can set this reader flag')
+    for terminal in pack.terminals:
+        for predicate in terminal.all:
+            if predicate['kind']=='flag_set' and predicate['flag_id'] not in settable:
+                _err('E_FLAG_UNSETTABLE',f'terminal {terminal.id}.all.flag_id','no effect can set this predicate flag')
+    for clue in pack.clues:
+        if clue.source_id in objects:
+            source=objects[clue.source_id][1]
+            reader=source.reader
+        else:
+            item=items.get(clue.source_id)
+            reader=item.reader if item else None
+        if (reader is None or not any(e.type=='reveal_clue' and e.clue_id==clue.id for e in reader.effects)
+                or (reader.when_flag_id and reader.when_flag_id not in settable)
+                or (clue.source_id in objects and reader.when_room_id not in (None, clue.room_id))):
+            _err('E_CLUE_UNREVEALABLE',f'clue {clue.id}.source_id','source reader cannot reveal this clue')
+    for effect in all_effects:
+        if effect.type=='end_run' and effect.state=='victory':
+            _err('E_UNSUPPORTED_MECHANIC','$.effects','victory may only be reached through a victory terminal predicate')
     # Every bank string's placeholders must exactly equal the declared slot set.
     for e in pack.bank:
         if not e.fallback.strip(): _err('E_BANK_FALLBACK_MISSING',f'bank {e.key}.fallback','fallback must be nonempty')

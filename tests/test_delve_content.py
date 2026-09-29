@@ -5,7 +5,10 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from delve.pack import PackError, load_pack, validate_pack
+from delve.pack import PackError, load_pack, load_engine_ready_pack, validate_pack
+from delve.engine import Action, Engine
+from delve.state import DelveState
+from delve.render import RenderMemory, render_event
 
 PACK_PATH = Path(__file__).parents[1] / 'delve' / 'content' / 'mossy_fast_slice.json'
 DATA = json.loads(PACK_PATH.read_text(encoding='utf-8'))
@@ -49,6 +52,57 @@ class DelveContentTests(unittest.TestCase):
     def test_pack_loads_and_validates(self):
         pack = load_pack(PACK_PATH)
         self.assertEqual(validate_pack(pack), pack)
+
+
+    def test_shipped_pack_is_engine_ready(self):
+        self.assertEqual(load_engine_ready_pack(PACK_PATH).id, DATA['id'])
+
+    def test_real_engine_route_wins_and_blind_vault_attack_costs_hp(self):
+        pack = load_engine_ready_pack(PACK_PATH)
+
+        def run(seed, actions):
+            state = DelveState.new(pack, seed, 'fighter')
+            engine = Engine(pack, state)
+            memory = RenderMemory()
+            transcript = []
+            events = []
+            for action in actions:
+                emitted = engine.apply(action)
+                for event in emitted:
+                    self.assertIn(event.key, bank_map(), event.key)
+                    self.assertEqual(set(event.fact_slots), set(bank_map()[event.key]['fact_slots']), event.key)
+                    transcript.append(render_event(event, pack, seed, memory))
+                    events.append(event)
+            self.assertEqual(memory.problems, [])
+            return state, events, transcript
+
+        winning_actions = [Action('attack', 'goblin') for _ in range(6)]
+        winning_actions += [
+            Action('get', 'brass_ring_obj'),
+            Action('move', direction='east'), Action('move', direction='south'),
+            Action('use', 'brass_ring'), Action('look', 'mira'),
+            Action('move', direction='north'), Action('look', 'collapsed_dome'),
+            Action('move', direction='east'), Action('look', 'star_chart'),
+            Action('move', direction='north'),
+            Action('attack', 'captain'), Action('brace'), Action('attack', 'captain'),
+            Action('shove', 'captain'), Action('attack', 'captain'),
+        ]
+        state, events, transcript = run(1, winning_actions)
+        self.assertEqual(state.terminal, 'victory')
+        self.assertEqual(set(state.known_clues), {'mira_route', 'chart_route', 'dome_route'})
+        self.assertEqual(sum(event.key == 'fact.payoff' for event in events), 1)
+        self.assertIn('hazard.trigger', [event.key for event in events])
+        self.assertEqual(len(winning_actions), 21)
+        print(f'Winning route actions used: {len(winning_actions)}')
+
+        blind_actions = [Action('attack', 'goblin') for _ in range(6)] + [
+            Action('move', direction='east'), Action('move', direction='east'),
+            Action('move', direction='north'), Action('attack', 'captain'),
+            Action('attack', 'captain'),
+        ]
+        blind, blind_events, _ = run(1, blind_actions)
+        self.assertFalse(blind.known_facts)
+        self.assertTrue(blind.player['hp'] < blind.player['max_hp'] or blind.terminal == 'dead')
 
     def test_exact_five_named_rooms(self):
         self.assertEqual({r['id'] for r in DATA['rooms']}, {
@@ -209,7 +263,7 @@ class DelveContentTests(unittest.TestCase):
                 if reader is None:
                     continue
                 effects = reader['effects']
-                has_purpose = obj['id'] in clue_sources or any(e['type'] in {'reveal_clue', 'set_flag'} for e in effects)
+                has_purpose = obj['id'] in clue_sources or 'item_id' in obj or any(e['type'] in {'reveal_clue', 'set_flag'} for e in effects)
                 self.assertTrue(effects or has_purpose, obj['id'])
 
 

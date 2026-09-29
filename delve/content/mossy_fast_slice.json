@@ -31,7 +31,7 @@
             "effects": [
               {
                 "type": "set_flag",
-                "flag_id": "ring_given",
+                "flag_id": "ring_seen",
                 "value": true
               }
             ]
@@ -268,22 +268,12 @@
           "name": "offering bowl",
           "zone": "near",
           "reader": {
-            "on": "use",
-            "event_key": "item.use.bowl",
-            "effects": [
-              {
-                "type": "heal",
-                "target": "player",
-                "amount": 2
-              },
-              {
-                "type": "set_flag",
-                "flag_id": "bowl_used",
-                "value": true
-              }
-            ],
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [],
             "when_flag_id": "bowl_used"
-          }
+          },
+          "item_id": "offering_bowl_item"
         }
       ]
     }
@@ -417,10 +407,10 @@
   "hazards": [
     {
       "id": "observatory_collapse",
-      "room_id": "collapsed_observatory",
+      "room_id": "hollow_vault",
       "zone": "hazard",
       "tag": "collapse",
-      "event_key": "hazard.observatory",
+      "event_key": "hazard.vault",
       "trigger": {
         "action": "shove",
         "requires_flag_id": "captain_route_known"
@@ -522,6 +512,26 @@
         ],
         "when_room_id": "mira_gallery"
       }
+    },
+    {
+      "id": "offering_bowl_item",
+      "name": "offering bowl",
+      "reader": {
+        "on": "use",
+        "event_key": "item.use.bowl",
+        "effects": [
+          {
+            "type": "heal",
+            "target": "player",
+            "amount": 2
+          },
+          {
+            "type": "set_flag",
+            "flag_id": "bowl_used",
+            "value": true
+          }
+        ]
+      }
     }
   ],
   "truth": {
@@ -601,47 +611,53 @@
     "entries": [
       {
         "key": "room.entry",
-        "fact_slots": [],
-        "variants": [
-          "Rain needles the moss. A Goblin guards the brass ring."
+        "fact_slots": [
+          "room_name"
         ],
-        "fallback": "Rain needles the moss. A Goblin guards the brass ring."
+        "variants": [
+          "{{room_name}}: Rain needles the moss. A Goblin guards the brass ring."
+        ],
+        "fallback": "{{room_name}}: Rain needles the moss. A Goblin guards the brass ring."
       },
       {
         "key": "room.observatory",
-        "fact_slots": [],
-        "variants": [
-          "The dome sags overhead; a black crack points east."
+        "fact_slots": [
+          "room_name"
         ],
-        "fallback": "The dome sags overhead; a black crack points east."
+        "variants": [
+          "{{room_name}}: The dome sags overhead; a black crack points east."
+        ],
+        "fallback": "{{room_name}}: The dome sags overhead; a black crack points east."
       },
       {
         "key": "room.chart_chamber",
-        "fact_slots": [],
-        "variants": [
-          "Dust rims the bell, compass, and star chart."
+        "fact_slots": [
+          "room_name"
         ],
-        "fallback": "Dust rims the bell, compass, and star chart."
+        "variants": [
+          "{{room_name}}: Dust rims the bell, compass, and star chart."
+        ],
+        "fallback": "{{room_name}}: Dust rims the bell, compass, and star chart."
       },
       {
         "key": "room.gallery",
-        "fact_slots": [],
-        "variants": [
-          "Mira watches the empty brass ring stand. She wants it; “the ring first.”",
-          "Mira waits beside a bare velvet groove; the missing ring is the only polite subject.",
-          "A brass nameplate reads Mira. She eyes your hands: “The ring first.”",
-          "Mira guards an empty display slot and looks unimpressed by your arrival.",
-          "The gallery smells of polish and withheld information. Mira wants her ring back."
+        "fact_slots": [
+          "room_name"
         ],
-        "fallback": "Mira watches the empty brass ring stand. She wants it; “the ring first.”"
+        "variants": [
+          "{{room_name}}: Mira watches the empty brass ring stand. She wants it; “the ring first.”"
+        ],
+        "fallback": "{{room_name}}: Mira watches the empty brass ring stand. She wants it; “the ring first.”"
       },
       {
         "key": "room.vault",
-        "fact_slots": [],
-        "variants": [
-          "The Hobgoblin Captain waits beneath a split stone arch."
+        "fact_slots": [
+          "room_name"
         ],
-        "fallback": "The Hobgoblin Captain waits beneath a split stone arch."
+        "variants": [
+          "{{room_name}}: The Hobgoblin Captain waits beneath a split stone arch."
+        ],
+        "fallback": "{{room_name}}: The Hobgoblin Captain waits beneath a split stone arch."
       },
       {
         "key": "room.enter",
@@ -729,51 +745,59 @@
       },
       {
         "key": "intent.goblin.grab",
-        "fact_slots": [],
-        "variants": [
-          "The Goblin reaches for your collar; brace or strike now.",
-          "The Goblin hooks a hand toward you; brace or hit first.",
-          "The Goblin lunges to grab; brace or attack.",
-          "The Goblin reaches low; brace or break its rhythm.",
-          "The Goblin darts for your sleeve; brace or break free."
+        "fact_slots": [
+          "enemy_name"
         ],
-        "fallback": "The Goblin reaches for your collar; brace or strike now."
+        "variants": [
+          "{{enemy_name}}: {{enemy_name}} reaches for your collar; brace or strike now.",
+          "{{enemy_name}}: {{enemy_name}} hooks a hand toward you; brace or hit first.",
+          "{{enemy_name}}: {{enemy_name}} lunges to grab; brace or attack.",
+          "{{enemy_name}}: {{enemy_name}} reaches low; brace or break its rhythm.",
+          "{{enemy_name}}: {{enemy_name}} darts for your sleeve; brace or break free."
+        ],
+        "fallback": "{{enemy_name}}: {{enemy_name}} reaches for your collar; brace or strike now."
       },
       {
         "key": "intent.goblin.strike",
-        "fact_slots": [],
-        "variants": [
-          "The Goblin draws back a short blade; brace or attack.",
-          "The Goblin angles its blade toward you; brace or strike.",
-          "A short blade flashes as the Goblin prepares to strike.",
-          "The Goblin sets its feet and cocks its blade; brace now.",
-          "The Goblin shifts its knife hand; brace or answer."
+        "fact_slots": [
+          "enemy_name"
         ],
-        "fallback": "The Goblin draws back a short blade; brace or attack."
+        "variants": [
+          "{{enemy_name}}: {{enemy_name}} draws back a short blade; brace or attack.",
+          "{{enemy_name}}: {{enemy_name}} angles its blade toward you; brace or strike.",
+          "{{enemy_name}}: A short blade flashes as the {{enemy_name}} prepares to strike.",
+          "{{enemy_name}}: {{enemy_name}} sets its feet and cocks its blade; brace now.",
+          "{{enemy_name}}: {{enemy_name}} shifts its knife hand; brace or answer."
+        ],
+        "fallback": "{{enemy_name}}: {{enemy_name}} draws back a short blade; brace or attack."
       },
       {
         "key": "intent.captain.guard",
-        "fact_slots": [],
-        "variants": [
-          "The Hobgoblin Captain locks its guard; throw the leaf or attack through it.",
-          "The Captain raises a tight guard; a thrown leaf can strip it.",
-          "The Captain settles behind its guard; throw the silver leaf or risk an attack.",
-          "A guarded stance closes the doorway; the leaf can break its defense.",
-          "The Captain seals the gap with his forearm; the leaf can open it."
+        "fact_slots": [
+          "enemy_name"
         ],
-        "fallback": "The Hobgoblin Captain locks its guard; throw the leaf or attack through it."
+        "variants": [
+          "{{enemy_name}}: {{enemy_name}} locks its guard; throw the leaf or attack through it.",
+          "{{enemy_name}}: {{enemy_name}} raises a tight guard; a thrown leaf can strip it.",
+          "{{enemy_name}}: {{enemy_name}} settles behind its guard; throw the silver leaf or risk an attack.",
+          "{{enemy_name}}: {{enemy_name}} — A guarded stance closes the doorway; the leaf can break its defense.",
+          "{{enemy_name}}: {{enemy_name}} seals the gap with his forearm; the leaf can open it."
+        ],
+        "fallback": "{{enemy_name}}: {{enemy_name}} locks its guard; throw the leaf or attack through it."
       },
       {
         "key": "intent.captain.smash",
-        "fact_slots": [],
-        "variants": [
-          "The Captain draws both fists back; brace or shove.",
-          "Both fists rise over the doorway. The Captain means it.",
-          "The Captain plants his boots and brings both fists down. Brace or shove.",
-          "His shoulders bunch; your ribs get the advance notice.",
-          "The Captain winds both fists up like a man with one plan."
+        "fact_slots": [
+          "enemy_name"
         ],
-        "fallback": "The Captain draws both fists back; brace or shove."
+        "variants": [
+          "{{enemy_name}}: {{enemy_name}} draws both fists back; brace or shove.",
+          "{{enemy_name}}: Both fists rise over the doorway. {{enemy_name}} means it.",
+          "{{enemy_name}}: {{enemy_name}} plants his boots and brings both fists down. Brace or shove.",
+          "{{enemy_name}}: {{enemy_name}} — His shoulders bunch; your ribs get the advance notice.",
+          "{{enemy_name}}: {{enemy_name}} winds both fists up like a man with one plan."
+        ],
+        "fallback": "{{enemy_name}}: {{enemy_name}} draws both fists back; brace or shove."
       },
       {
         "key": "attack.hit",
@@ -868,27 +892,26 @@
       },
       {
         "key": "clock.tick",
-        "fact_slots": [],
-        "variants": [
-          "The patrol presses closer.",
-          "Dust sifts from the passage as boots approach.",
-          "A distant buckle clicks against stone.",
-          "The quiet behind you gets smaller.",
-          "Footsteps trade distance for certainty."
+        "fact_slots": [
+          "clock_label",
+          "value",
+          "max"
         ],
-        "fallback": "The patrol presses closer."
+        "variants": [
+          "{{clock_label}} advances to {{value}} of {{max}}; boots scrape closer."
+        ],
+        "fallback": "{{clock_label}} advances to {{value}} of {{max}}; boots scrape closer."
       },
       {
         "key": "clock.threshold",
-        "fact_slots": [],
-        "variants": [
-          "Bootsteps scrape the far passage.",
-          "A heel clicks twice beyond the wall.",
-          "The patrol hears you; the stone carries sound too well.",
-          "Boots answer from the east, slow and close.",
-          "Someone outside has stopped pretending not to listen."
+        "fact_slots": [
+          "clock_label",
+          "at"
         ],
-        "fallback": "Bootsteps scrape the far passage."
+        "variants": [
+          "{{clock_label}} reaches {{at}}; the patrol hears you."
+        ],
+        "fallback": "{{clock_label}} reaches {{at}}; the patrol hears you."
       },
       {
         "key": "clue.reveal",
@@ -904,11 +927,13 @@
       },
       {
         "key": "fact.payoff",
-        "fact_slots": [],
-        "variants": [
-          "Mira, the chart, and the dome agree: the Captain can be shoved beneath the collapse."
+        "fact_slots": [
+          "fact_label"
         ],
-        "fallback": "Mira, the chart, and the dome agree: the Captain can be shoved beneath the collapse."
+        "variants": [
+          "You know it now: {{fact_label}}"
+        ],
+        "fallback": "You know it now: {{fact_label}}"
       },
       {
         "key": "terminal.victory",
@@ -928,13 +953,12 @@
           "cause"
         ],
         "variants": [
-          "{{cause}} takes your legs out from under you.",
-          "You hit the stone after {{cause}} finds its mark.",
-          "{{cause}} leaves you breathing once, then not at all.",
-          "Your last clear thought belongs to {{cause}}.",
-          "The room goes dark; {{cause}} did the work."
+          "Killed by {{cause}}. Stone takes the rest.",
+          "{{cause}} kills you; the floor catches your cheek.",
+          "The last hit is {{cause}}. Your breath stops.",
+          "{{cause}} puts you down beneath the cold ceiling."
         ],
-        "fallback": "{{cause}} takes your legs out from under you."
+        "fallback": "Killed by {{cause}}. Stone takes the rest."
       },
       {
         "key": "terminal.retry",
@@ -986,37 +1010,39 @@
       },
       {
         "key": "object.compass",
-        "fact_slots": [],
-        "variants": [
-          "The compass needle catches the dome crack and points at the vault.",
-          "Its stone needle settles beneath the split arch.",
-          "You align the compass with the fracture; the vault sits below it.",
-          "The compass scratches a line from this room to the vault.",
-          "A worn arrow on the compass points under the cracked dome."
+        "fact_slots": [
+          "object_name"
         ],
-        "fallback": "The compass needle catches the dome crack and points at the vault."
+        "variants": [
+          "{{object_name}} needle catches the dome crack and points at the vault.",
+          "{{object_name}} — Its stone needle settles beneath the split arch.",
+          "{{object_name}} — You align the compass with the fracture; the vault sits below it.",
+          "{{object_name}} scratches a line from this room to the vault.",
+          "{{object_name}} — A worn arrow on the compass points under the cracked dome."
+        ],
+        "fallback": "{{object_name}} needle catches the dome crack and points at the vault."
       },
       {
-        "key": "hazard.observatory",
+        "key": "hazard.vault",
         "fact_slots": [],
         "variants": [
-          "Stone breaks loose from the collapsed dome."
+          "A slab drops beneath the Captain, grinding the doorway shut."
         ],
-        "fallback": "Stone breaks loose from the collapsed dome."
+        "fallback": "A slab drops beneath the Captain, grinding the doorway shut."
       },
       {
         "key": "item.use.bowl",
         "fact_slots": [
-          "amount"
+          "item_name"
         ],
         "variants": [
-          "The bowl restores {{amount}} HP.",
-          "Warmth returns with the last swallow: {{amount}} HP.",
-          "You drink; the bowl puts {{amount}} HP back.",
-          "A bitter mouthful restores {{amount}} HP.",
-          "The offering bowl mends {{amount}} HP and tastes of pennies."
+          "The bowl restores {{item_name}} HP.",
+          "Warmth returns with the last swallow: {{item_name}} HP.",
+          "You drink; the bowl puts {{item_name}} HP back.",
+          "A bitter mouthful restores {{item_name}} HP.",
+          "The offering bowl mends {{item_name}} HP and tastes of pennies."
         ],
-        "fallback": "The bowl restores {{amount}} HP."
+        "fallback": "The bowl restores {{item_name}} HP."
       },
       {
         "key": "get.blocked",
@@ -1034,29 +1060,29 @@
       },
       {
         "key": "get.not_takeable",
-        "fact_slots": [],
-        "variants": [
-          "That stays where it is.",
-          "You test it; the room declines to part with it.",
-          "A good look, a bad souvenir.",
-          "It has no business in your pack.",
-          "You leave the fixture to its important work."
+        "fact_slots": [
+          "object_name"
         ],
-        "fallback": "That stays where it is."
+        "variants": [
+          "{{object_name}}: That stays where it is.",
+          "{{object_name}}: You test it; the room declines to part with it.",
+          "{{object_name}}: A good look, a bad souvenir.",
+          "{{object_name}}: It has no business in your pack.",
+          "{{object_name}}: You leave the fixture to its important work."
+        ],
+        "fallback": "{{object_name}}: That stays where it is."
       },
       {
         "key": "use.nothing",
-        "fact_slots": [
-          "item_name"
-        ],
+        "fact_slots": [],
         "variants": [
-          "{{item_name}} does nothing useful here.",
-          "You try {{item_name}}; the silence is precise.",
-          "{{item_name}} has no answer for this room.",
-          "No latch, wound, or problem yields to {{item_name}}.",
-          "You use {{item_name}}. Nothing changes but your patience."
+          "Nothing useful answers this use.",
+          "You try it; the silence is precise.",
+          "No latch or wound yields to that.",
+          "You use it. Nothing changes but patience.",
+          "The room declines the offer."
         ],
-        "fallback": "{{item_name}} does nothing useful here."
+        "fallback": "Nothing useful answers this use."
       },
       {
         "key": "item.use.ring",
@@ -1064,25 +1090,27 @@
           "item_name"
         ],
         "variants": [
-          "Mira takes {{item_name}}, turning it once. “Fine. He braces in the doorway; predictable men are a public service.”",
-          "She closes her hand around {{item_name}}. “The Captain braces in that doorway. At least one of us can learn.”",
-          "Mira pockets {{item_name}}. “Doorway. He always braces there. Now we are both poorer.”",
-          "The ring {{item_name}} disappears into Mira’s sleeve. “He braces there. Quote me accurately.”",
+          "She palms {{item_name}}. “He braces in the doorway. Predictable men are a public service.”",
+          "Mira closes her hand around {{item_name}}. “The Captain braces there. At least one of us can learn.”",
+          "She pockets {{item_name}}. “Doorway. He always braces there. Now we are both poorer.”",
+          "Mira pockets {{item_name}}. “He braces there. Quote me accurately.”",
           "Mira weighs {{item_name}}. “That doorway is his habit. Keep the rest of your questions short.”"
         ],
-        "fallback": "Mira takes {{item_name}}, turning it once. “Fine. He braces in the doorway; predictable men are a public service.”"
+        "fallback": "She palms {{item_name}}. “He braces in the doorway. Predictable men are a public service.”"
       },
       {
         "key": "object.nameplate",
-        "fact_slots": [],
-        "variants": [
-          "The plate names Mira; its empty ring groove points to a very personal errand.",
-          "Mira, cut into brass. Below the name, a ring-shaped patch stays clean.",
-          "The nameplate shines around one empty circle. Someone keeps checking it.",
-          "A neat label, an empty slot, and the distinct feeling of being recruited.",
-          "The plate says Mira. The bare groove says you have found your first task."
+        "fact_slots": [
+          "object_name"
         ],
-        "fallback": "The plate names Mira; its empty ring groove points to a very personal errand."
+        "variants": [
+          "{{object_name}} names Mira; its empty ring groove points to a very personal errand.",
+          "{{object_name}} — Mira, cut into brass. Below the name, a ring-shaped patch stays clean.",
+          "{{object_name}} shines around one empty circle. Someone keeps checking it.",
+          "{{object_name}} — A neat label, an empty slot, and the distinct feeling of being recruited.",
+          "{{object_name}} says Mira. The bare groove says you have found your first task."
+        ],
+        "fallback": "{{object_name}} names Mira; its empty ring groove points to a very personal errand."
       },
       {
         "key": "clock.caught",
@@ -1095,11 +1123,178 @@
           "They reach you in the narrow way and leave a four point reminder."
         ],
         "fallback": "The patrol reaches you; a cudgel catches your ribs for four."
+      },
+      {
+        "key": "move.blocked",
+        "fact_slots": [
+          "enemy_name"
+        ],
+        "variants": [
+          "{{enemy_name}} fills the way; your shoulder gets nowhere.",
+          "You try past {{enemy_name}}; armor says no.",
+          "{{enemy_name}} owns this doorway for now.",
+          "The route stops at {{enemy_name}} and a wall of bad manners."
+        ],
+        "fallback": "{{enemy_name}} fills the way; your shoulder gets nowhere."
+      },
+      {
+        "key": "move.no_exit",
+        "fact_slots": [
+          "direction"
+        ],
+        "variants": [
+          "No {{direction}} exit; stone keeps its borders.",
+          "You test {{direction}}; the wall holds.",
+          "Nothing opens to the {{direction}}.",
+          "The {{direction}} route ends in damp rock."
+        ],
+        "fallback": "No {{direction}} exit; stone keeps its borders."
+      },
+      {
+        "key": "target.unknown",
+        "fact_slots": [
+          "target"
+        ],
+        "variants": [
+          "No {{target}} answers your hand.",
+          "You find no {{target}} here.",
+          "The room offers no sign of {{target}}.",
+          "Your fingers close on air where {{target}} should be."
+        ],
+        "fallback": "No {{target}} answers your hand."
+      },
+      {
+        "key": "inventory",
+        "fact_slots": [
+          "items"
+        ],
+        "variants": [
+          "You carry: {{items}}.",
+          "Your pockets report: {{items}}.",
+          "The pack holds {{items}}.",
+          "You count {{items}} and a little lint."
+        ],
+        "fallback": "You carry: {{items}}."
+      },
+      {
+        "key": "help",
+        "fact_slots": [],
+        "variants": [
+          "Move with the compass words; read things, mind intent, keep your hands useful.",
+          "Read the room. The enemy tells you what comes next.",
+          "Look, move, and answer the warning before it lands.",
+          "The room gives clues; the enemy gives one turn of notice."
+        ],
+        "fallback": "Move with the compass words; read things, mind intent, keep your hands useful."
+      },
+      {
+        "key": "terminal.quit",
+        "fact_slots": [],
+        "variants": [
+          "You leave the stone to its own company.",
+          "You turn your back; the dark keeps the door.",
+          "You quit while the walls are still being polite.",
+          "The delve closes behind your last step."
+        ],
+        "fallback": "You leave the stone to its own company."
+      },
+      {
+        "key": "combat.not_yet",
+        "fact_slots": [],
+        "variants": [
+          "No foe has offered you that problem yet.",
+          "You set your stance against empty air.",
+          "There is no declared intent to answer.",
+          "The room has no enemy in reach."
+        ],
+        "fallback": "No foe has offered you that problem yet."
+      },
+      {
+        "key": "brace.wasted",
+        "fact_slots": [],
+        "variants": [
+          "You brace against nothing useful.",
+          "Your arms lock; the guard does not care.",
+          "You set your feet while the threat stays elsewhere.",
+          "A careful brace meets a stubborn pause."
+        ],
+        "fallback": "You brace against nothing useful."
+      },
+      {
+        "key": "throw.fizzle",
+        "fact_slots": [],
+        "variants": [
+          "The toss finds no weakness; the intent lands.",
+          "Your throw spends itself against the guard.",
+          "The object clatters away; the danger stays.",
+          "You throw wide of the opening."
+        ],
+        "fallback": "The toss finds no weakness; the intent lands."
+      },
+      {
+        "key": "intent.cancelled",
+        "fact_slots": [],
+        "variants": [
+          "The enemy loses its next move.",
+          "Your throw steals the coming blow.",
+          "The declared attack dies in its first breath.",
+          "You leave the enemy holding an empty intention."
+        ],
+        "fallback": "The enemy loses its next move."
+      },
+      {
+        "key": "enemy.hit",
+        "fact_slots": [
+          "enemy_name",
+          "damage"
+        ],
+        "variants": [
+          "{{enemy_name}} catches you for {{damage}}.",
+          "A blow from {{enemy_name}} drives {{damage}} into your ribs.",
+          "{{enemy_name}} lands the hit; pain costs {{damage}}.",
+          "The strike from {{enemy_name}} leaves {{damage}} worth of hurt."
+        ],
+        "fallback": "{{enemy_name}} catches you for {{damage}}."
+      },
+      {
+        "key": "enemy.miss",
+        "fact_slots": [
+          "enemy_name"
+        ],
+        "variants": [
+          "{{enemy_name}} cuts only air.",
+          "You slip the reach; {{enemy_name}} finds stone.",
+          "{{enemy_name}} swings past your shoulder.",
+          "The blow from {{enemy_name}} whistles wide."
+        ],
+        "fallback": "{{enemy_name}} cuts only air."
+      },
+      {
+        "key": "retreat.blocked",
+        "fact_slots": [],
+        "variants": [
+          "The doorway is wrong for retreat.",
+          "You try to break away; the room keeps you close.",
+          "The enemy or the angle shuts the exit.",
+          "Your retreat finds no open line."
+        ],
+        "fallback": "The doorway is wrong for retreat."
+      },
+      {
+        "key": "terminal.closed",
+        "fact_slots": [],
+        "variants": [
+          "The run is already closed.",
+          "Nothing more moves in this delve.",
+          "The last choice has already settled.",
+          "The room holds still; this run is over."
+        ],
+        "fallback": "The run is already closed."
       }
     ]
   },
   "meta": {
-    "authoring_receipt": "M1.7c: ring pickup unlocks Mira; three independent route clues power the dome payoff; patrol alert at two, costly catch at four.",
-    "notes": "Message-only flag: patrol_alert is surfaced by clock.threshold bootstep lines. Other flags are read by a hazard, terminal, or conditional reader. Message-only flag: mira_identified is set by reading Mira’s nameplate and its event line supplies the hook."
+    "authoring_receipt": "M1.7d: engine structural banks and slots aligned; ring handover gates Mira clue; vault collapse now shares Captain room; bowl pickup wired to inventory use.",
+    "notes": "Message-only flag: patrol_alert is surfaced by clock.threshold bootstep lines. Other flags are read by a hazard, terminal, or conditional reader. Message-only flag: mira_identified is set by reading Mira’s nameplate and its event line supplies the hook. Content correction: captain_route_known enables the vault collapse shove; the bowl is takeable so Engine.use can reach its reader. Message-only flag: ring_seen marks inspection; only using the carried ring in Mira Gallery sets ring_given."
   }
 }

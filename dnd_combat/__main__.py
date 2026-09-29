@@ -265,6 +265,7 @@ def main(
             )
         elif choice == "talk":
             target = input("Talk to whom? ").strip()
+            remembered_prior_ask = game.mira_memory.asked_about_ring
             interacted, message = game.talk(target)
             narrated = message
             if interacted:
@@ -275,14 +276,22 @@ def main(
                         "room": game.room.name,
                         "hero": game.hero.name,
                         "inventory": list(game.hero.inventory),
+                        "mira_remembered_prior_ask": remembered_prior_ask,
                         "deterministic_response": message,
                     },
                     message,
                 )
+                if not narrated.startswith(message):
+                    narrated = f"{message}\n{narrated}"
             recorder.input(
                 f"{raw_choice} {target}".strip(), game, action="talk",
                 outcome=message,
-                details={"target": target, "response": message, "vault_opened": game.vault_opened},
+                details={
+                    "target": target,
+                    "response": message,
+                    "vault_opened": game.vault_opened,
+                    "mira_remembered_prior_ask": remembered_prior_ask,
+                },
             )
             print(narrated)
         else:

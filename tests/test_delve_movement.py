@@ -70,7 +70,8 @@ class MovementTests(unittest.TestCase):
         self.state.flags.add('unlocked'); self.state.room_id='vault'
         events=self.apply('use','key_item')
         self.assertEqual(events[0].key,'item.use')
-        self.assertEqual(self.state.rng_draws,0)
+        # Amendment 3 point 6: combat use resolves the declared intent after item effects (2 draws).
+        self.assertEqual(self.state.rng_draws,2)
 
     def test_effect_payoff_and_thresholds_are_one_shot(self):
         events=[]; self.engine._effects([type('E',(),{'type':'reveal_clue','clue_id':i})() for i in ('bell_silenced','chart_route','dome_crack')],events)

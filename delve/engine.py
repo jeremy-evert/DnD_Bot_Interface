@@ -2,6 +2,7 @@
 from dataclasses import dataclass, asdict
 
 from .model import DIRECTIONS
+from .state import roll_die
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,9 @@ class Engine:
             return self._record([e])
         verb = action.verb
         events = []
+        foe_at_start = self._living_enemy()
+        intent_at_start = self._current_intent(foe_at_start) if foe_at_start else None
+        valid = True
         if verb in ('n','s','e','w','go','move'):
             direction = action.direction or {'n':'north','s':'south','e':'east','w':'west'}.get(verb)
             if direction not in DIRECTIONS:
@@ -73,7 +77,7 @@ class Engine:
                 st = s.enemies[enemy.id]
                 intent = next((i for i in enemy.intents if i.id == st['current_intent_id']), None)
                 if intent:
-                    events.append(self._event(intent.telegraph_key, typ='enemy_intent'))
+                    events.append(self._event(intent.telegraph_key, {'enemy_name':enemy.name}, typ='enemy_intent'))
             self._ticks('move', events)
         elif verb in ('look','x','examine'):
             if not action.target_id:
@@ -97,12 +101,126 @@ class Engine:
             events.extend(self._get(action.target_id))
         elif verb in ('use','u'):
             events.extend(self._use(action.target_id))
+            valid = bool(action.target_id in s.inventory)
+            if valid and foe_at_start and intent_at_start:
+                self._finish_round(foe_at_start, intent_at_start, events)
         elif verb in ('attack','shove','brace','throw','retreat'):
-            events.append(self._event('combat.not_yet'))
+            if verb == 'attack':
+                if not foe_at_start or not intent_at_start:
+                    events.append(self._event('combat.not_yet')); valid=False
+                else:
+                    self._attack(foe_at_start, intent_at_start, events)
+                    if self._living_enemy() is foe_at_start:
+                        self._finish_round(foe_at_start, intent_at_start, events)
+            elif verb == 'brace':
+                if not foe_at_start or not intent_at_start:
+                    events.append(self._event('combat.not_yet')); valid=False
+                else:
+                    counter = self._brace(foe_at_start, intent_at_start, events)
+                    if counter != 'cancel' and self._living_enemy() is foe_at_start:
+                        self._finish_round(foe_at_start, intent_at_start, events, counter)
+                    elif counter == 'cancel' and self._living_enemy() is foe_at_start:
+                        self._advance_and_declare(foe_at_start, events)
+            elif verb == 'retreat':
+                if not self._retreat(action.direction, foe_at_start, intent_at_start, events): valid=False
+            else:
+                # M1.6 owns shove and throw.
+                events.append(self._event('combat.not_yet')); valid=False
         else:
             events.append(self._event('target.unknown', {'target': action.target_id or verb}))
-        self._terminal_check(events)
+        if valid:
+            s.turn += 1
+            self._terminal_check(events)
         return self._record(events)
+
+    def _current_intent(self, enemy):
+        if enemy is None: return None
+        ident=self.state.enemies[enemy.id]['current_intent_id']
+        return next((i for i in enemy.intents if i.id==ident),None)
+
+    def _declare_intent(self, enemy):
+        st=self.state.enemies[enemy.id]
+        if st['hp']<=0 or not enemy.intent_cycle:
+            st['current_intent_id']=None; return None
+        ident=enemy.intent_cycle[st['intent_index'] % len(enemy.intent_cycle)]
+        st['current_intent_id']=ident
+        intent=next(i for i in enemy.intents if i.id==ident)
+        return intent
+
+    def _advance_and_declare(self, enemy, events):
+        st=self.state.enemies[enemy.id]
+        st['intent_index']=(st['intent_index']+1) % max(1,len(enemy.intent_cycle))
+        intent=self._declare_intent(enemy)
+        if intent: events.append(self._event(intent.telegraph_key,{'enemy_name':enemy.name},typ='enemy_intent'))
+
+    def _attack(self, enemy, intent, events):
+        s=self.state; st=s.enemies[enemy.id]
+        die=roll_die(s,20); damage_die=roll_die(s,s.player['damage_die'])
+        ac=enemy.stats.armor_class+(2 if intent.type=='guard' else 0)
+        total=die+s.player['attack_bonus']; margin=total-ac
+        hit=die==20 or (die!=1 and total>=ac)
+        if hit:
+            damage=max(1,damage_die+s.player['damage_bonus'])
+            st['hp']=max(0,st['hp']-damage); st['alive']=st['hp']>0
+            events.append(self._event('attack.hit',{'enemy_name':enemy.name,'damage':damage},numbers={'roll':die,'total':total,'damage':damage}))
+            if not st['alive']: st['current_intent_id']=None
+        else:
+            events.append(self._event('attack.miss',{'margin':abs(margin)},numbers={'roll':die,'total':total,'margin':margin}))
+
+    def _brace(self, enemy, intent, events):
+        if intent.type=='strike':
+            events.append(self._event('brace.success')); return 'halve'
+        if intent.type=='smash':
+            events.append(self._event('brace.success')); return 'negate'
+        if intent.type=='grab':
+            events.append(self._event('brace.success')); return 'resist'
+        if intent.type=='rush':
+            events.append(self._event('brace.success')); return 'cancel'
+        events.append(self._event('brace.wasted')); return None
+
+    def _resolve_intent(self, enemy, counter=None, events=None):
+        if events is None: events=[]
+        s=self.state; st=s.enemies[enemy.id]; intent=self._current_intent(enemy)
+        if st['hp']<=0 or intent is None: return events
+        damages=[e.amount for e in intent.effects if e.type=='damage' and e.target=='player']
+        # A damaging intent always consumes both dice, including a negated hit.
+        roll=roll_die(s,20); die=roll_die(s,enemy.stats.damage_die)
+        total=roll+enemy.stats.attack_bonus; ac=s.player['armor_class']
+        hit=roll==20 or (roll!=1 and total>=ac)
+        if not hit and damages:
+            events.append(self._event('enemy.miss',{'enemy_name':enemy.name},numbers={'roll':roll,'total':total}))
+            return events
+        if damages:
+            damage=max(1,die+enemy.stats.damage_bonus)+sum(damages)
+            if counter=='halve': damage//=2
+            if counter in ('negate','resist'): damage=0
+            if damage:
+                s.player['hp']=max(0,s.player['hp']-damage)
+                if s.player['hp']==0:
+                    s.flags.add('__player_hp_zero')
+                    self._last_death_cause=f'{enemy.name} {intent.type}'
+                events.append(self._event('enemy.hit',{'enemy_name':enemy.name,'damage':damage},numbers={'roll':roll,'total':total,'damage':damage}))
+        for effect in intent.effects:
+            if effect.type!='damage': self._effects([effect],events)
+        return events
+
+    def _finish_round(self, enemy, intent, events, counter=None):
+        if self.state.enemies[enemy.id]['current_intent_id'] != intent.id: return
+        self._resolve_intent(enemy,counter,events)
+        self._advance_and_declare(enemy,events)
+
+    def _retreat(self, direction, enemy, intent, events):
+        s=self.state
+        if not enemy or not intent or s.player['zone']!='doorway' or intent.type=='grab':
+            events.append(self._event('retreat.blocked')); return False
+        ex=next((x for x in self.rooms[s.room_id].exits if x.direction==direction and x.gate is None),None)
+        if ex is None:
+            events.append(self._event('retreat.blocked')); return False
+        s.room_id=ex.to_room_id; s.player['zone']='near'
+        events.append(self._event('room.return',{'room_name':self.rooms[s.room_id].title}))
+        events.append(self._event(self.rooms[s.room_id].description_key,{'room_name':self.rooms[s.room_id].title},typ='room_description'))
+        self._ticks('retreat',events)
+        return True
 
     def _record(self, events):
         self.state.event_log.extend(e.to_dict() for e in events)
@@ -193,7 +311,10 @@ class Engine:
     def _terminal_check(self, events):
         s=self.state
         for terminal in self.pack.terminals:
-            if terminal.kind in ('death','dead') and s.player['hp'] <= 0: s.terminal='dead'; events.append(self._event('terminal.death', {'cause':'your wounds'})); return
+            if terminal.kind in ('death','dead') and s.player['hp'] <= 0:
+                s.terminal='dead'
+                cause=getattr(self,'_last_death_cause','your wounds')
+                events.append(self._event('terminal.death', {'cause':cause})); return
         for terminal in self.pack.terminals:
             if terminal.kind != 'victory': continue
             if all(self._predicate(p) for p in terminal.all):

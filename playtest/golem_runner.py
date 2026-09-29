@@ -20,7 +20,7 @@ from .schema import (SCHEMA_VERSION, SCHEMA_MINOR, GAME_ENTRYPOINTS, GAME_TREE_S
                      strict_json_loads, validate_run_receipt)
 from .transcript import load_transcript
 
-SANDBOX_POLICY = "workspace-write; capsule-only cwd; read access is not restricted and is audited"
+SANDBOX_POLICY = "codex workspace-write: writes only under capsule cwd; reads unrestricted (verified by probe evidence/sandbox_probe)"
 TERMINATIONS = {"won", "dead", "cap", "stalled", "timeout"}
 
 
@@ -53,12 +53,13 @@ def validate_journal(entry):
 
 
 def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_combat"):
-    """Return forbidden event hits. Capsule/playctl references are allowed."""
+    """Return forbidden event hits, allowing only exact capsule/playctl/reply references."""
     forbidden = ("dnd_combat", "DnD_Bot_Interface", "playtest/", "transcript.jsonl",
                  "manifest.json", "frames.jsonl", ".git", "/mnt/nora")
     if game_id == "delve": forbidden += ("delve/",)
     capsule = str(Path(capsule_path).resolve()) if capsule_path else ""
     session = str(Path(session_path).resolve()) if session_path else ""
+    replies = str(Path(capsule).parent / "replies") if capsule else ""
     hits = []
     def strings(value):
         if isinstance(value, str):
@@ -70,18 +71,68 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
         elif isinstance(value, (list, tuple)):
             for item in value:
                 yield from strings(item)
+    def command_uses_shipped_playctl(event):
+        if not capsule:
+            return False
+        launcher = str(Path(capsule) / "playctl")
+        if not Path(launcher).is_file():
+            return False
+        commands = []
+        def collect(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == "command" and isinstance(item, str):
+                        commands.append(item)
+                    collect(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item)
+        collect(event)
+        for command in commands:
+            try:
+                tokens = __import__("shlex").split(command)
+            except ValueError:
+                continue
+            if tokens and tokens[0] in {"./playctl", launcher}:
+                return True
+        return False
+
+    def spans_for(text, location):
+        if not location:
+            return []
+        result, offset = [], 0
+        while True:
+            index = text.find(location, offset)
+            if index < 0:
+                return result
+            end = index + len(location)
+            if end == len(text) or text[end] in "/\\\\ \t\r\n\"'?:":
+                result.append((index, end))
+            offset = index + 1
+
     for event in events:
         raw = event if isinstance(event, str) else json.dumps(event, sort_keys=True)
         candidates = list(strings(event)) or [raw]
-        for fragment in (*forbidden, *((session,) if session else ())):
+        shipped_playctl = command_uses_shipped_playctl(event)
+        for fragment in (*forbidden, *((session,) if session else ()), *((replies,) if replies else ())):
             found = False
             for candidate in candidates:
-                scrubbed = candidate.replace(capsule, "<capsule>") if capsule else candidate
-                scrubbed = scrubbed.replace("playctl", "<playctl>")
-                if session:
-                    scrubbed = scrubbed.replace(session, "<session>")
-                if fragment and fragment in scrubbed:
-                    found = True
+                offset = 0
+                while fragment:
+                    index = candidate.find(fragment, offset)
+                    if index < 0:
+                        break
+                    end = index + len(fragment)
+                    in_capsule = any(start <= index and end <= stop for start, stop in spans_for(candidate, capsule))
+                    in_replies = shipped_playctl and any(start <= index and end <= stop for start, stop in spans_for(candidate, replies))
+                    # A session-path match is always evidence, even where its spelling
+                    # begins with a path that happens to be the capsule prefix.
+                    session_match = bool(session and fragment == session)
+                    if not session_match and not in_capsule and not in_replies:
+                        found = True
+                        break
+                    offset = index + 1
+                if found:
                     break
             if found:
                 hits.append({"fragment": fragment, "event": raw})
@@ -150,12 +201,14 @@ def _run_play(args):
     return code, out.getvalue(), err.getvalue()
 
 
-def _playctl_source(repo_root=None, inbox=None, outbox=None, journal=None, nonce=""):
+def _playctl_source(repo_root=None, inbox=None, outbox=None, journal=None, nonce="", replies_dir=None):
+    reply_root = Path(replies_dir).resolve() if replies_dir is not None else Path("replies").resolve()
     return f'''#!/usr/bin/env python3
 import json, os, sys, time, stat
 from pathlib import Path
 CAPSULE = Path(__file__).resolve().parent
-INBOX, OUTBOX, JOURNAL = CAPSULE / "inbox", CAPSULE / "outbox", CAPSULE / "journal.jsonl"
+INBOX, JOURNAL = CAPSULE / "inbox", CAPSULE / "journal.jsonl"
+REPLIES = Path({str(reply_root)!r})
 NONCE = {nonce!r}
 CLOSED = CAPSULE / "CLOSED"
 def validate_journal(entry):
@@ -193,16 +246,27 @@ def main():
         number = 1
         while True:
             target = INBOX / (f"{{number:04d}}.json")
+            reservation = INBOX / (target.name + ".reserve")
             try:
-                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                reserve_fd = os.open(reservation, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(reserve_fd)
                 break
             except FileExistsError:
                 number += 1
         request_id = target.stem
         payload = json.dumps({{"inputs": value, "request_id": request_id}}, sort_keys=True, ensure_ascii=False) + "\\n"
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(payload); stream.flush(); os.fsync(stream.fileno())
-        reply = OUTBOX / target.name
+        encoded = payload.encode("utf-8")
+        if len(encoded) > 64 * 1024: return 2
+        temporary = INBOX / (target.name + "." + os.urandom(8).hex() + ".tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded); stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        finally:
+            try: temporary.unlink()
+            except FileNotFoundError: pass
+        reply = REPLIES / target.name
         deadline = time.monotonic() + 180
         while not reply.exists():
             if CLOSED.exists(): return 2
@@ -226,13 +290,15 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
               golem_cmd=None, seed=41, name="Ada", character="fighter", turn_cap=35,
               timeout=1800, retry_count=0, retry_of=None, run_id=None, session_id=None,
               game_id="dnd_combat",
-              event_log=None, final_ack_grace=1.0):
+              event_log=None, final_ack_grace=8.0):
     """Run a controller-owned dispatch and finalize its v2 receipt after child exit."""
     session_dir, run_dir = Path(session_dir).resolve(), Path(run_dir).resolve()
     if type(retry_count) is not int or retry_count not in (0, 1): raise ValueError("retry_count must be 0 or 1")
     if type(turn_cap) is not int or turn_cap <= 0: raise ValueError("turn_cap must be positive")
     if game_id not in {"dnd_combat", "delve"}: raise ValueError("unsupported game_id")
     if type(is_holdout) is not bool: raise ValueError("is_holdout must be explicit bool")
+    if type(final_ack_grace) not in (int, float) or final_ack_grace < 0:
+        raise ValueError("final_ack_grace must be a nonnegative number")
     if persona_prompt_text is None and persona_text is None: raise ValueError("persona_prompt_text must be supplied explicitly")
     if retry_count and not retry_of: raise ValueError("retry requires retry_of")
     repo_root = Path(__file__).resolve().parent.parent
@@ -242,11 +308,14 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     if capsule == repo_root or repo_root in capsule.parents or capsule == session_dir or session_dir in capsule.parents:
         raise ValueError("capsule must not be inside repository root or canonical session directory")
     capsule.mkdir(parents=True, mode=0o700); capsule.chmod(0o700)
-    for directory in ("inbox", "outbox"): (capsule / directory).mkdir(mode=0o700)
+    (capsule / "inbox").mkdir(mode=0o700)
+    replies = run_dir / "replies"
+    if replies.exists(): shutil.rmtree(replies)
+    replies.mkdir(mode=0o700)
     journal_path = capsule / "journal.jsonl"; journal_path.touch(mode=0o600)
     nonce = secrets.token_hex(32)
     playctl_path = capsule / "playctl"
-    playctl_path.write_text(_playctl_source(repo_root, capsule / "inbox", capsule / "outbox", journal_path, nonce), encoding="utf-8")
+    playctl_path.write_text(_playctl_source(repo_root, capsule / "inbox", None, journal_path, nonce, replies), encoding="utf-8")
     playctl_path.chmod(0o700)
     run_id = run_id or secrets.token_hex(16); session_id = session_id or secrets.token_hex(16)
     persona_prompt_text = persona_prompt_text if persona_prompt_text is not None else persona_text
@@ -273,8 +342,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     if code: raise RuntimeError(setup_error or "could not initialize session")
     manifest = strict_json_loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
     initial = load_transcript(session_dir / "transcript.jsonl")[-1]
-    for entry in (capsule / "outbox").iterdir(): entry.unlink()
-    _atomic_json(capsule / "outbox" / "0000.json", {"output": initial["new_output"], "turn": 0,
+    _atomic_json(replies / "0000.json", {"output": initial["new_output"], "turn": 0,
         "terminated": None, "request_id": "0000"})
     out_capture, err_capture = (run_dir / "stdout.log").open("wb"), (run_dir / "stderr.log").open("wb")
     started = time.monotonic(); prompt_stream = actual_prompt_file.open("rb")
@@ -285,6 +353,8 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     game_termination, stop_reason = "playing", None
     timed_out, protocol_error, controller_stop = False, False, False
     processed, events = set(), []
+    final_ack_seen = False
+    controller_killed = False
     try:
         while True:
             if time.monotonic() - started > timeout:
@@ -294,7 +364,13 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                 if inbox.name in processed: continue
                 processed.add(inbox.name)
                 try:
-                    request = strict_json_loads(inbox.read_text(encoding="utf-8"))
+                    info = inbox.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024: raise ValueError("invalid request file")
+                    request_bytes = inbox.read_bytes()
+                    if len(request_bytes) > 64 * 1024: raise ValueError("request exceeds 64 KiB")
+                    request = strict_json_loads(request_bytes.decode("utf-8"))
+                    if not isinstance(request, dict) or set(request) != {"inputs", "request_id"}:
+                        raise ValueError("invalid request shape")
                     frame, request_id = request["inputs"], inbox.stem
                     if request.get("request_id") != request_id: raise ValueError("request identity mismatch")
                     if not isinstance(frame, list) or not frame or any(not isinstance(x, str) for x in frame): raise ValueError("invalid input frame")
@@ -303,7 +379,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                     code, output, error = _run_play(["step", "--session", str(session_dir), "--inputs-json", json.dumps(frame, ensure_ascii=False)])
                     if code:
                         game_termination, stop_reason = "error", "game_error"
-                        _controller_reply(capsule / "outbox" / inbox.name, {"output": error or "play step failed",
+                        _controller_reply(replies / inbox.name, {"output": error or "play step failed",
                             "turn": turns, "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
                         break
                     rows = load_transcript(session_dir / "transcript.jsonl"); record = rows[-1]
@@ -315,12 +391,12 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                     elif terminal == "quit": game_termination, stop_reason = "quit", "player_stop"
                     elif no_progress >= 3: stop_reason = "no_progress"
                     elif turns >= turn_cap: stop_reason = "cap"
-                    _controller_reply(capsule / "outbox" / inbox.name, {"output": output, "turn": turns,
+                    _controller_reply(replies / inbox.name, {"output": output, "turn": turns,
                         "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
                     if stop_reason: controller_stop = True; break
                 except Exception as exc:
                     protocol_error = True; stop_reason = "ipc_error"
-                    try: _controller_reply(capsule / "outbox" / inbox.name, {"output": str(exc), "turn": turns,
+                    try: _controller_reply(replies / inbox.name, {"output": str(exc), "turn": turns,
                         "terminated": "ipc_error", "request_id": inbox.stem, "nonce": nonce})
                     except FileExistsError: pass
                     break
@@ -333,12 +409,14 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
             time.sleep(.025)
         if controller_stop:
             try: child.wait(timeout=final_ack_grace)
-            except subprocess.TimeoutExpired: _stop_process_group(child)
+            except subprocess.TimeoutExpired:
+                controller_killed = child.poll() is None
+                _stop_process_group(child)
         else: _stop_process_group(child)
     finally:
         _stop_process_group(child); out_capture.close(); err_capture.close()
     (capsule / "CLOSED").write_text("closed\n", encoding="utf-8")
-    for path in (capsule / "inbox", capsule / "outbox"):
+    for path in (capsule / "inbox",):
         for item in path.iterdir():
             if item.is_file() and not item.is_symlink(): item.chmod(0o400)
         path.chmod(0o500)
@@ -362,15 +440,19 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
         journal_consistent = len(journal_rows) == turns and [item["turn_id"] for item in journal_rows] == list(range(1, turns + 1))
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
         journal_rows, journal_consistent = [], False
+    # Existing receipt fields encode the final acknowledgement: a complete,
+    # ordered journal has one row per action, including the controller's last reply.
+    final_ack_seen = journal_consistent
     end = _game_manifest(game_id) if game_id == "delve" else _game_manifest()
     audit_status = "VIOLATED" if hits else "CLEAN" if recognized else "UNVERIFIABLE"
     if start["game"] != end["game"] or start["harness"] != end["harness"]: outcome = "GAME_MODIFIED_DURING_RUN"
+    elif protocol_error: outcome = "ERROR"
     elif hits: outcome = "BLINDNESS_VIOLATED"
     elif not recognized: outcome = "AUDIT_UNVERIFIABLE"
-    elif timed_out or protocol_error or stop_reason in {"child_exit_error", "premature_exit", "ipc_error"}: outcome = "INCOMPLETE_DISPATCH"
+    elif timed_out or stop_reason in {"child_exit_error", "premature_exit", "ipc_error"}: outcome = "INCOMPLETE_DISPATCH"
     elif stop_reason not in {"won", "dead", "cap", "no_progress", "player_stop"}: outcome = "INCOMPLETE_DISPATCH"
-    elif child.returncode != 0 and not (controller_stop and child.returncode == -signal.SIGKILL): outcome = "INCOMPLETE_DISPATCH"
-    elif not journal_consistent: outcome = "INCOMPLETE_DISPATCH"
+    elif child.returncode != 0 and not (controller_stop and controller_killed and child.returncode == -signal.SIGKILL): outcome = "INCOMPLETE_DISPATCH"
+    elif not final_ack_seen: outcome = "INCOMPLETE_DISPATCH"
     else: outcome = "COMPLETE"
     receipt = {
         "schema_version": SCHEMA_VERSION, "schema_minor": SCHEMA_MINOR, "game_id": game_id,
@@ -392,6 +474,7 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
         "stop_reason": stop_reason or "premature_exit", "termination": game_termination,
         "run_outcome": outcome, "turns": turns, "transcript_record_count": len(rows),
         "journal_record_count": len(journal_rows), "journal_consistent": journal_consistent,
+        "sandbox_policy": SANDBOX_POLICY,
         "transcript_head_chain_hash": rows[-1]["chain_hash"], "stdout_sha256": _sha(stdout_data),
         "stderr_sha256": _sha(stderr_data), "journal_sha256": _sha(journal_bytes),
         "audit_log_sha256": _sha(event_bytes), "audit_status": audit_status,

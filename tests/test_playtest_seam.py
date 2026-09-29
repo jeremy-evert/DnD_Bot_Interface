@@ -66,6 +66,7 @@ class PlaytestSeamTests(unittest.TestCase):
     def _judge(self, session, run, label, candidates):
         records = load_transcript(session / "transcript.jsonl")
         receipt = strict_json_loads((run / "run_receipt.json").read_text())
+        self.assertEqual(receipt["sandbox_policy"], "codex workspace-write: writes only under capsule cwd; reads unrestricted (verified by probe evidence/sandbox_probe)")
         journal_sha = hashlib.sha256((run / "capsule/journal.jsonl").read_bytes()).hexdigest()
         verifier_cmd = (self._verifier_command(self.root / f"{label}-verifier.py", candidates[0]["quote"])
                         if candidates else None)
@@ -199,6 +200,9 @@ class PlaytestSeamTests(unittest.TestCase):
         bad_receipt = json.loads((left_run/"run_receipt.json").read_text()); del bad_receipt["turn_cap"]
         with self.assertRaisesRegex(ValueError, "missing=.*turn_cap"):
             validate_run_receipt(bad_receipt)
+        bad_receipt = json.loads((left_run/"run_receipt.json").read_text()); del bad_receipt["sandbox_policy"]
+        with self.assertRaisesRegex(ValueError, "missing=.*sandbox_policy"):
+            validate_run_receipt(bad_receipt)
         bad_manifest = json.loads((left_session/"manifest.json").read_text()); del bad_manifest["seed"]
         with self.assertRaisesRegex(ValueError, "missing=.*seed"):
             from playtest.schema import validate_manifest
@@ -326,11 +330,14 @@ class PlaytestSeamTests(unittest.TestCase):
         old_receipt = dict(load_run_receipt(base_run / "run_receipt.json"))
         for field in ("schema_minor", "game_id", "game_entrypoint", "game_tree_spec"):
             old_receipt.pop(field, None)
+        old_receipt.pop("sandbox_policy", None)
         old_receipt_path = self.root / "schema-v2.0-receipt.json"
         old_receipt_path.write_text(canonical_json(old_receipt) + "\n", encoding="utf-8")
         loaded_old_receipt = load_run_receipt(old_receipt_path)
         self.assertEqual(loaded_old_receipt["game_id"], "dnd_combat")
         self.assertEqual(loaded_old_receipt["game_tree_spec"], "dnd_combat/*.py")
+        self.assertEqual(loaded_old_receipt["schema_minor"], 0)
+        self.assertIsNone(loaded_old_receipt["sandbox_policy"])
 
 
 if __name__ == "__main__":

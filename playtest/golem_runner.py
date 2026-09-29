@@ -54,14 +54,30 @@ def audit_commands(events, capsule_path=None, session_path=None):
     capsule = str(Path(capsule_path).resolve()) if capsule_path else ""
     session = str(Path(session_path).resolve()) if session_path else ""
     hits = []
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield from strings(key)
+                yield from strings(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from strings(item)
     for event in events:
         raw = event if isinstance(event, str) else json.dumps(event, sort_keys=True)
-        # Exempt the capsule path and its own playctl invocation from path references.
-        scrubbed = raw.replace(capsule, "<capsule>").replace("./playctl", "<playctl>") if capsule else raw.replace("./playctl", "<playctl>")
-        if session:
-            scrubbed = scrubbed.replace(session, "<session>")
+        candidates = list(strings(event)) or [raw]
         for fragment in (*forbidden, *((session,) if session else ())):
-            if fragment in scrubbed:
+            found = False
+            for candidate in candidates:
+                scrubbed = candidate.replace(capsule, "<capsule>") if capsule else candidate
+                scrubbed = scrubbed.replace("playctl", "<playctl>")
+                if session:
+                    scrubbed = scrubbed.replace(session, "<session>")
+                if fragment and fragment in scrubbed:
+                    found = True
+                    break
+            if found:
                 hits.append({"fragment": fragment, "event": raw})
     return hits
 
@@ -81,14 +97,26 @@ def _run_play(args):
     return code, out.getvalue(), err.getvalue()
 
 
-def _playctl_source(repo_root, inbox, outbox, journal):
+def _playctl_source(repo_root=None, inbox=None, outbox=None, journal=None):
     return f'''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
-ROOT = {str(repo_root)!r}
 CAPSULE = Path(__file__).resolve().parent
 INBOX, OUTBOX, JOURNAL = CAPSULE / "inbox", CAPSULE / "outbox", CAPSULE / "journal.jsonl"
-sys.path.insert(0, ROOT)
+def validate_journal(entry):
+    fields = {{"turn_id", "wanted", "surprise", "continue", "reason", "unsupported_intent"}}
+    if not isinstance(entry, dict) or set(entry) != fields:
+        raise ValueError("journal entry fields must be exactly " + ", ".join(sorted(fields)))
+    if type(entry["turn_id"]) is not int or entry["turn_id"] < 1:
+        raise ValueError("journal.turn_id must be a positive integer")
+    for key in ("wanted", "surprise", "reason"):
+        if not isinstance(entry[key], str):
+            raise ValueError(f"journal.{{key}} must be a string")
+    if type(entry["continue"]) is not int or entry["continue"] not in (0, 1):
+        raise ValueError("journal.continue must be 0 or 1")
+    if entry["unsupported_intent"] is not None and not isinstance(entry["unsupported_intent"], str):
+        raise ValueError("journal.unsupported_intent must be a string or null")
+    return entry
 def atomic(path, value):
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(value, sort_keys=True, ensure_ascii=False) + "\\n", encoding="utf-8")
@@ -99,7 +127,6 @@ def main():
     try:
         value = json.loads(sys.argv[2])
         if sys.argv[1] == "journal":
-            from playtest.golem_runner import validate_journal
             validate_journal(value)
             with JOURNAL.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(value, sort_keys=True, ensure_ascii=False) + "\\n")
@@ -236,11 +263,16 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
         if child.poll() is None:
             child.kill(); child.wait()
         out_capture.close(); err_capture.close()
-    event_path = Path(event_log) if event_log else run_dir / "codex_events.jsonl"
-    if event_path.exists():
-        for line in event_path.read_text(encoding="utf-8").splitlines():
+    if event_log is not None:
+        event_path = Path(event_log)
+        if event_path.exists():
+            for line in event_path.read_text(encoding="utf-8").splitlines():
+                try: events.append(json.loads(line))
+                except json.JSONDecodeError: events.append(line)
+    else:
+        for line in (run_dir / "stdout.log").read_text(encoding="utf-8", errors="replace").splitlines():
             try: events.append(json.loads(line))
-            except json.JSONDecodeError: events.append(line)
+            except json.JSONDecodeError: pass
     hits = audit_commands(events, capsule, session_dir)
     rows = load_transcript(session_dir / "transcript.jsonl")
     stdout_data, stderr_data = (run_dir / "stdout.log").read_bytes(), (run_dir / "stderr.log").read_bytes()
@@ -248,7 +280,9 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                    timeout=timed_out, stdout_sha256=_sha(stdout_data), stderr_sha256=_sha(stderr_data),
                    journal_sha256=_sha(journal_path.read_bytes()), transcript_head_chain_hash=rows[-1]["chain_hash"],
                    turns_taken=turn, termination=termination,
-                   outcome=("INCOMPLETE_DISPATCH" if timed_out else "BLINDNESS_VIOLATED" if hits else "COMPLETE"),
+                   audit_events_seen=len(events),
+                   outcome=("INCOMPLETE_DISPATCH" if timed_out else "BLINDNESS_VIOLATED" if hits else
+                            "AUDIT_UNVERIFIABLE" if event_log is None and child.returncode is not None and not events else "COMPLETE"),
                    blindness_hits=hits)
     (run_dir / "run_receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return receipt

@@ -10,7 +10,7 @@ import textwrap
 import unittest
 
 from playtest.golem_prompt import build_prompt
-from playtest.golem_runner import audit_commands, run_golem
+from playtest.golem_runner import audit_commands, run_golem, validate_journal, _playctl_source
 from playtest.transcript import verify_chain
 
 
@@ -21,16 +21,17 @@ class GolemRunnerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
 
-    def fake(self, body):
+    def fake(self, body, emit_event=True):
         path = self.base / "fake_golem.py"
-        path.write_text("#!/usr/bin/env python3\n" + textwrap.dedent(body), encoding="utf-8")
+        event = 'print(__import__("json").dumps({"type":"command","command":"./playctl step [\\\"look\\\"]"}), flush=True)\n' if emit_event else ""
+        path.write_text("#!/usr/bin/env python3\n" + event + textwrap.dedent(body), encoding="utf-8")
         path.chmod(0o755)
         return [sys.executable, str(path)]
 
-    def run_fake(self, body, *, cap=35, timeout=5, event_log=None):
+    def run_fake(self, body, *, cap=35, timeout=5, event_log=None, emit_event=True):
         type(self).runs += 1
         session, run = self.base / f"session-{self.runs}", self.base / f"run-{self.runs}"
-        receipt = run_golem(session, run, golem_cmd=self.fake(body), turn_cap=cap,
+        receipt = run_golem(session, run, golem_cmd=self.fake(body, emit_event=emit_event), turn_cap=cap,
                             timeout=timeout, event_log=event_log)
         return session, run, receipt
 
@@ -106,6 +107,54 @@ class GolemRunnerTests(unittest.TestCase):
             '''
         _, run, _ = self.run_fake(body)
         self.assertEqual((run / "capsule/journal.jsonl").read_text(), "")
+
+    def test_capsule_launcher_has_no_repository_or_session_knowledge(self):
+        session, run, _ = self.run_fake("pass\n")
+        source = (run / "capsule/playctl").read_text()
+        self.assertNotIn(str(Path(__file__).resolve().parents[1]), source)
+        self.assertNotIn(str(session), source)
+        self.assertNotIn("sys.path.insert", source)
+        self.assertNotIn("playtest.golem_runner", source)
+
+    def test_launcher_journal_validator_matches_authority(self):
+        generated = {}
+        generated["__file__"] = str(self.base / "capsule" / "playctl")
+        exec(_playctl_source(), generated)
+        valid = [
+            {"turn_id": 1, "wanted": "advance", "surprise": "", "continue": 1, "reason": "ok", "unsupported_intent": None},
+            {"turn_id": 2, "wanted": "", "surprise": "a", "continue": 0, "reason": "", "unsupported_intent": "fly"},
+        ]
+        invalid = [
+            {}, {"turn_id": True, "wanted": "", "surprise": "", "continue": 1, "reason": "", "unsupported_intent": None},
+            {"turn_id": 1, "wanted": 3, "surprise": "", "continue": 1, "reason": "", "unsupported_intent": None},
+            {"turn_id": 1, "wanted": "", "surprise": "", "continue": 2, "reason": "", "unsupported_intent": None},
+            {"turn_id": 1, "wanted": "", "surprise": "", "continue": 1, "reason": "", "unsupported_intent": 4},
+            {"turn_id": 1, "wanted": "", "surprise": "", "continue": 1, "reason": "", "unsupported_intent": None, "extra": 1},
+        ]
+        for entry in valid + invalid:
+            def accepts(fn):
+                try: fn(entry)
+                except (ValueError, TypeError): return False
+                return True
+            self.assertEqual(accepts(validate_journal), accepts(generated["validate_journal"]), entry)
+
+    def test_stdout_events_are_audited_and_empty_audit_is_unverifiable(self):
+        _, _, forbidden = self.run_fake('''
+            import json
+            print(json.dumps({"type":"tool_call","payload":{"item":{"text":"cat /secret/DnD_Bot_Interface/dnd_combat/adventure.py"}}}))
+            ''', emit_event=False)
+        self.assertEqual(forbidden["outcome"], "BLINDNESS_VIOLATED")
+        _, _, clean = self.run_fake("pass\n")
+        self.assertEqual(clean["outcome"], "COMPLETE")
+        _, _, empty = self.run_fake("pass\n", emit_event=False)
+        self.assertEqual(empty["outcome"], "AUDIT_UNVERIFIABLE")
+        self.assertEqual(empty["audit_events_seen"], 0)
+
+    def test_playctl_works_from_a_different_cwd(self):
+        session, run, _ = self.run_fake("pass\n")
+        launcher = run / "capsule/playctl"
+        result = subprocess.run([str(launcher), "journal", json.dumps({"turn_id": 1, "wanted": "", "surprise": "", "continue": 1, "reason": "ok", "unsupported_intent": None})], cwd=self.base, check=False)
+        self.assertEqual(result.returncode, 0)
 
     def test_prompt_supports_sealed_persona_hash_and_no_scoring(self):
         prompt = build_prompt("a sealed persona: cautious and literal", 35)

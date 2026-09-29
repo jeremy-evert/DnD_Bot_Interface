@@ -90,10 +90,33 @@ class GolemRunnerTests(unittest.TestCase):
         replies = shared / "replies"
         replies.mkdir()
         self.assertTrue(audit_commands([{"command": f"cat {replies}/0001.json"}], capsule, session))
-        self.assertFalse(audit_commands([{"command": f"./playctl step reads {replies}/0001.json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": f"./playctl step reads {replies}/0001.json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": f"./playctl step '[\"look\"]'; cat {replies}/0001.json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": f"./playctl step '[\"look\"]'\ncat {replies}/0001.json"}], capsule, session))
+        self.assertFalse(audit_commands([{"command": "./playctl step '[\"look\"]'"}], capsule, session))
+        self.assertFalse(audit_commands([{"command": "cd capsule && ./playctl step '[\"look\"]'"}], capsule, session))
+        self.assertFalse(audit_commands([{"command": "./playctl step '[\"look\"]' | tee x"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": "./playctl step '[\"look\"]' | tee " + str(replies / "copy.json")}], capsule, session))
+        self.assertTrue(audit_commands([{"command": "./playctl step '[\"look\"]' $(cat " + str(replies / "0001.json") + ")"}], capsule, session))
         events = self.base / "events.jsonl"
         events.write_text(json.dumps(hit[0]) + "\n")
         _, _, receipt = self.run_fake("pass\n", event_log=events)
+        self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
+
+    def test_compound_playctl_then_reply_read_is_audited(self):
+        reply = self.base / f"run-{type(self).runs + 1}" / "replies" / "0001.json"
+        _, run, receipt = self.run_fake(f'''
+            import json, shlex, subprocess
+            from pathlib import Path
+            reply = Path({str(reply)!r})
+            command = "./playctl step " + shlex.quote(json.dumps(["look"])) + "; cat " + shlex.quote(str(reply))
+            print(json.dumps({{"type":"command", "command":command}}), flush=True)
+            subprocess.run(command, shell=True)
+            note = {{"turn_id":1,"wanted":"advance","surprise":"","continue":1,"reason":"test","unsupported_intent":None}}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            ''', cap=1)
+        self.assertIn('"request_id": "0001"', (run / "stdout.log").read_text())
+        self.assertEqual(receipt["audit_status"], "VIOLATED")
         self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
 
     def test_capsule_is_minimal_and_cannot_be_under_repo_or_session(self):
@@ -279,6 +302,17 @@ class GolemRunnerTests(unittest.TestCase):
         self.assertEqual(receipt["run_outcome"], "COMPLETE")
         self.assertTrue(receipt["journal_consistent"])
         self.assertEqual(receipt["journal_record_count"], 1)
+
+    def test_prewritten_final_action_journal_is_not_acknowledgement(self):
+        _, _, receipt = self.run_fake('''
+            import json, shlex, subprocess
+            note = {"turn_id":1,"wanted":"advance","surprise":"prewritten","continue":1,"reason":"before terminal reply","unsupported_intent":None}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+            ''', cap=1, final_ack_grace=.2)
+        self.assertEqual(receipt["journal_record_count"], 1)
+        self.assertTrue(receipt["journal_consistent"])
+        self.assertEqual(receipt["run_outcome"], "INCOMPLETE_DISPATCH")
 
     def test_missing_final_action_journal_expires_grace_as_incomplete(self):
         _, _, receipt = self.run_fake('''

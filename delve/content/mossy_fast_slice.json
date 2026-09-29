@@ -1,0 +1,928 @@
+{
+  "schema_version": 1,
+  "id": "mossy_fast_slice",
+  "title": "The Mossy Fast Delve",
+  "start_room_id": "mossy_entry",
+  "atmosphere_registry": [],
+  "rooms": [
+    {
+      "id": "mossy_entry",
+      "title": "Mossy Entry",
+      "description_key": "room.entry",
+      "zones": [
+        "near",
+        "far",
+        "doorway"
+      ],
+      "exits": [
+        {
+          "direction": "east",
+          "to_room_id": "collapsed_observatory"
+        }
+      ],
+      "objects": [
+        {
+          "id": "brass_ring_obj",
+          "name": "brass ring",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "ring_seen",
+                "value": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "collapsed_observatory",
+      "title": "Collapsed Observatory",
+      "description_key": "room.observatory",
+      "zones": [
+        "near",
+        "far",
+        "doorway",
+        "hazard"
+      ],
+      "exits": [
+        {
+          "direction": "west",
+          "to_room_id": "mossy_entry"
+        },
+        {
+          "direction": "east",
+          "to_room_id": "chart_chamber"
+        },
+        {
+          "direction": "south",
+          "to_room_id": "mira_gallery"
+        }
+      ],
+      "objects": [
+        {
+          "id": "collapsed_dome",
+          "name": "collapsed dome",
+          "zone": "hazard",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "reveal_clue",
+                "clue_id": "dome_route"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "chart_chamber",
+      "title": "Chart Chamber",
+      "description_key": "room.chart_chamber",
+      "zones": [
+        "near",
+        "far",
+        "doorway"
+      ],
+      "exits": [
+        {
+          "direction": "west",
+          "to_room_id": "collapsed_observatory"
+        },
+        {
+          "direction": "north",
+          "to_room_id": "hollow_vault"
+        },
+        {
+          "direction": "south",
+          "to_room_id": "mira_gallery"
+        }
+      ],
+      "objects": [
+        {
+          "id": "clapperless_bell",
+          "name": "clapperless bell",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "bell_seen",
+                "value": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "stone_compass",
+          "name": "stone compass",
+          "zone": "far",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "alignment_seen",
+                "value": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "star_chart",
+          "name": "star chart",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "reveal_clue",
+                "clue_id": "chart_route"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "mira_gallery",
+      "title": "Mira Gallery",
+      "description_key": "room.gallery",
+      "zones": [
+        "near",
+        "far",
+        "doorway"
+      ],
+      "exits": [
+        {
+          "direction": "north",
+          "to_room_id": "collapsed_observatory"
+        },
+        {
+          "direction": "east",
+          "to_room_id": "chart_chamber"
+        },
+        {
+          "direction": "south",
+          "to_room_id": "hollow_vault"
+        }
+      ],
+      "npc_id": "mira",
+      "objects": [
+        {
+          "id": "mira",
+          "name": "Mira",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "when_flag_id": "ring_given",
+            "effects": [
+              {
+                "type": "reveal_clue",
+                "clue_id": "mira_route"
+              }
+            ]
+          }
+        },
+        {
+          "id": "brass_nameplate",
+          "name": "brass nameplate",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "mira_identified",
+                "value": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "hollow_vault",
+      "title": "Hollow Vault",
+      "description_key": "room.vault",
+      "zones": [
+        "near",
+        "far",
+        "doorway",
+        "hazard"
+      ],
+      "exits": [
+        {
+          "direction": "north",
+          "to_room_id": "chart_chamber"
+        },
+        {
+          "direction": "west",
+          "to_room_id": "mira_gallery"
+        }
+      ],
+      "objects": [
+        {
+          "id": "clay_cup_obj",
+          "name": "clay cup",
+          "zone": "near",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "cup_seen",
+                "value": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "silver_leaf_obj",
+          "name": "silver leaf",
+          "zone": "far",
+          "reader": {
+            "on": "look",
+            "event_key": "object.read",
+            "effects": [
+              {
+                "type": "set_flag",
+                "flag_id": "leaf_seen",
+                "value": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "offering_bowl",
+          "name": "offering bowl",
+          "zone": "near",
+          "reader": {
+            "on": "use",
+            "event_key": "item.use",
+            "effects": [
+              {
+                "type": "heal",
+                "target": "player",
+                "amount": 2
+              },
+              {
+                "type": "set_flag",
+                "flag_id": "bowl_used",
+                "value": true
+              }
+            ],
+            "when_flag_id": "bowl_unused"
+          }
+        }
+      ]
+    }
+  ],
+  "enemies": [
+    {
+      "id": "goblin",
+      "name": "Goblin",
+      "room_id": "mossy_entry",
+      "start_zone": "doorway",
+      "stats": {
+        "hp": 8,
+        "armor_class": 13,
+        "attack_bonus": 4,
+        "damage_die": 6,
+        "damage_bonus": 1
+      },
+      "intent_cycle": [
+        "grab",
+        "strike"
+      ],
+      "intents": [
+        {
+          "id": "grab",
+          "type": "grab",
+          "telegraph_key": "intent.goblin.grab",
+          "target_zone": "doorway",
+          "effects": [
+            {
+              "type": "damage",
+              "target": "player",
+              "amount": 2
+            }
+          ],
+          "counters": [
+            {
+              "action": "brace",
+              "result": "resist_grab"
+            },
+            {
+              "action": "attack",
+              "result": "normal_hit"
+            }
+          ]
+        },
+        {
+          "id": "strike",
+          "type": "strike",
+          "telegraph_key": "intent.goblin.strike",
+          "target_zone": "near",
+          "effects": [
+            {
+              "type": "damage",
+              "target": "player",
+              "amount": 2
+            }
+          ],
+          "counters": [
+            {
+              "action": "brace",
+              "result": "halve_damage"
+            },
+            {
+              "action": "attack",
+              "result": "normal_hit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "captain",
+      "name": "Hobgoblin Captain",
+      "room_id": "hollow_vault",
+      "start_zone": "doorway",
+      "stats": {
+        "hp": 18,
+        "armor_class": 14,
+        "attack_bonus": 5,
+        "damage_die": 8,
+        "damage_bonus": 2
+      },
+      "intent_cycle": [
+        "guard",
+        "smash"
+      ],
+      "intents": [
+        {
+          "id": "guard",
+          "type": "guard",
+          "telegraph_key": "intent.captain.guard",
+          "target_zone": "doorway",
+          "effects": [],
+          "counters": [
+            {
+              "action": "throw",
+              "result": "strip_guard"
+            },
+            {
+              "action": "attack",
+              "result": "hit_uses_ac_plus_2"
+            }
+          ]
+        },
+        {
+          "id": "smash",
+          "type": "smash",
+          "telegraph_key": "intent.captain.smash",
+          "target_zone": "doorway",
+          "effects": [
+            {
+              "type": "damage",
+              "target": "player",
+              "amount": 2
+            }
+          ],
+          "counters": [
+            {
+              "action": "brace",
+              "result": "negate"
+            },
+            {
+              "action": "shove",
+              "result": "send_to_hazard_if_route_known"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "hazards": [
+    {
+      "id": "observatory_collapse",
+      "room_id": "collapsed_observatory",
+      "zone": "hazard",
+      "tag": "collapse",
+      "event_key": "hazard.observatory",
+      "trigger": {
+        "action": "shove",
+        "requires_flag_id": "captain_route_known"
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "target": "enemy",
+          "amount": 6
+        }
+      ]
+    }
+  ],
+  "clocks": [
+    {
+      "id": "patrol",
+      "label": "PATROL",
+      "max": 4,
+      "start": 0,
+      "tick_sources": [
+        {
+          "source": "move",
+          "amount": 1
+        },
+        {
+          "source": "retreat",
+          "amount": 1
+        }
+      ],
+      "thresholds": [
+        {
+          "at": 2,
+          "effects": [
+            {
+              "type": "set_flag",
+              "flag_id": "patrol_alert",
+              "value": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "clay_cup",
+      "name": "clay cup",
+      "throw_tags": [
+        "interrupt_grab"
+      ],
+      "reader": {
+        "on": "throw",
+        "event_key": "throw.interrupt",
+        "effects": [
+          {
+            "type": "interrupt_intent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "silver_leaf",
+      "name": "silver leaf",
+      "throw_tags": [
+        "interrupt_guard"
+      ],
+      "reader": {
+        "on": "throw",
+        "event_key": "throw.interrupt",
+        "effects": [
+          {
+            "type": "interrupt_intent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "brass_ring",
+      "name": "brass ring",
+      "reader": {
+        "on": "use",
+        "event_key": "item.use",
+        "effects": [
+          {
+            "type": "set_flag",
+            "flag_id": "ring_given",
+            "value": true
+          }
+        ],
+        "when_room_id": "mira_gallery"
+      }
+    }
+  ],
+  "truth": {
+    "facts": [
+      {
+        "id": "captain_route",
+        "label": "The Captain can be shoved beneath the collapse.",
+        "payoff": true,
+        "clue_ids": [
+          "mira_route",
+          "chart_route",
+          "dome_route"
+        ],
+        "payoff_effects": [
+          {
+            "type": "set_flag",
+            "flag_id": "captain_route_known",
+            "value": true
+          }
+        ]
+      }
+    ],
+    "clues": [
+      {
+        "id": "mira_route",
+        "fact_id": "captain_route",
+        "source_id": "mira",
+        "room_id": "mira_gallery",
+        "event_key": "clue.mira"
+      },
+      {
+        "id": "chart_route",
+        "fact_id": "captain_route",
+        "source_id": "star_chart",
+        "room_id": "chart_chamber",
+        "event_key": "clue.chart"
+      },
+      {
+        "id": "dome_route",
+        "fact_id": "captain_route",
+        "source_id": "collapsed_dome",
+        "room_id": "collapsed_observatory",
+        "event_key": "clue.dome"
+      }
+    ]
+  },
+  "terminals": [
+    {
+      "id": "victory",
+      "kind": "victory",
+      "all": [
+        {
+          "kind": "enemy_dead",
+          "enemy_id": "captain"
+        },
+        {
+          "kind": "fact_known",
+          "fact_id": "captain_route"
+        }
+      ],
+      "event_key": "terminal.victory"
+    },
+    {
+      "id": "death",
+      "kind": "death",
+      "all": [
+        {
+          "kind": "flag_set",
+          "flag_id": "__player_hp_zero"
+        }
+      ],
+      "event_key": "terminal.death",
+      "retry_hint_key": "terminal.retry"
+    }
+  ],
+  "bank": {
+    "entries": [
+      {
+        "key": "room.entry",
+        "fact_slots": [],
+        "variants": [
+          "Rain needles the moss. A Goblin guards the brass ring."
+        ],
+        "fallback": "Rain needles the moss. A Goblin guards the brass ring."
+      },
+      {
+        "key": "room.observatory",
+        "fact_slots": [],
+        "variants": [
+          "The dome sags overhead; a black crack points east."
+        ],
+        "fallback": "The dome sags overhead; a black crack points east."
+      },
+      {
+        "key": "room.chart_chamber",
+        "fact_slots": [],
+        "variants": [
+          "Dust rims the bell, compass, and star chart."
+        ],
+        "fallback": "Dust rims the bell, compass, and star chart."
+      },
+      {
+        "key": "room.gallery",
+        "fact_slots": [],
+        "variants": [
+          "Mira is here, watching the brass ring; she wants it."
+        ],
+        "fallback": "Mira is here, watching the brass ring; she wants it."
+      },
+      {
+        "key": "room.vault",
+        "fact_slots": [],
+        "variants": [
+          "The Hobgoblin Captain waits beneath a split stone arch."
+        ],
+        "fallback": "The Hobgoblin Captain waits beneath a split stone arch."
+      },
+      {
+        "key": "room.enter",
+        "fact_slots": [
+          "room_name"
+        ],
+        "variants": [
+          "You enter {{room_name}}.",
+          "You step into {{room_name}}.",
+          "You cross into {{room_name}}.",
+          "You return into {{room_name}}."
+        ],
+        "fallback": "You enter {{room_name}}."
+      },
+      {
+        "key": "room.return",
+        "fact_slots": [
+          "room_name"
+        ],
+        "variants": [
+          "You return to {{room_name}}."
+        ],
+        "fallback": "You return to {{room_name}}."
+      },
+      {
+        "key": "object.read",
+        "fact_slots": [
+          "object_name"
+        ],
+        "variants": [
+          "You study {{object_name}}."
+        ],
+        "fallback": "You study {{object_name}}."
+      },
+      {
+        "key": "item.get",
+        "fact_slots": [
+          "item_name"
+        ],
+        "variants": [
+          "You take {{item_name}}."
+        ],
+        "fallback": "You take {{item_name}}."
+      },
+      {
+        "key": "item.use",
+        "fact_slots": [
+          "item_name"
+        ],
+        "variants": [
+          "You use {{item_name}}.",
+          "You place {{item_name}} in Mira’s waiting hand.",
+          "You pass {{item_name}} across the gallery.",
+          "You give {{item_name}} to Mira."
+        ],
+        "fallback": "You use {{item_name}}."
+      },
+      {
+        "key": "enemy.intent",
+        "fact_slots": [
+          "enemy_name"
+        ],
+        "variants": [
+          "{{enemy_name}} shifts its weight.",
+          "{{enemy_name}} watches your hands.",
+          "{{enemy_name}} sets its feet.",
+          "{{enemy_name}} closes its guard."
+        ],
+        "fallback": "{{enemy_name}} shifts its weight."
+      },
+      {
+        "key": "intent.goblin.grab",
+        "fact_slots": [],
+        "variants": [
+          "The Goblin reaches for your collar; brace or strike now.",
+          "The Goblin hooks a hand toward you; brace or hit first.",
+          "The Goblin lunges to grab; brace or attack.",
+          "The Goblin reaches low; brace or break its rhythm."
+        ],
+        "fallback": "The Goblin reaches for your collar; brace or strike now."
+      },
+      {
+        "key": "intent.goblin.strike",
+        "fact_slots": [],
+        "variants": [
+          "The Goblin draws back a short blade; brace or attack.",
+          "The Goblin angles its blade toward you; brace or strike.",
+          "A short blade flashes as the Goblin prepares to strike.",
+          "The Goblin sets its feet and cocks its blade; brace now."
+        ],
+        "fallback": "The Goblin draws back a short blade; brace or attack."
+      },
+      {
+        "key": "intent.captain.guard",
+        "fact_slots": [],
+        "variants": [
+          "The Hobgoblin Captain locks its guard; throw the leaf or attack through it.",
+          "The Captain raises a tight guard; a thrown leaf can strip it.",
+          "The Captain settles behind its guard; throw the silver leaf or risk an attack.",
+          "A guarded stance closes the doorway; the leaf can break its defense."
+        ],
+        "fallback": "The Hobgoblin Captain locks its guard; throw the leaf or attack through it."
+      },
+      {
+        "key": "intent.captain.smash",
+        "fact_slots": [],
+        "variants": [
+          "The Hobgoblin Captain raises its hammer over the doorway; brace or shove.",
+          "The Hobgoblin Captain lifts its hammer above the doorway; brace or shove.",
+          "The Hobgoblin Captain cocks its hammer over the doorway; brace or shove.",
+          "The Hobgoblin Captain brings its hammer high at the doorway; brace or shove."
+        ],
+        "fallback": "The Hobgoblin Captain raises its hammer over the doorway; brace or shove."
+      },
+      {
+        "key": "attack.hit",
+        "fact_slots": [
+          "enemy_name",
+          "damage"
+        ],
+        "variants": [
+          "Your blade bites {{enemy_name}} for {{damage}}.",
+          "You drive steel into {{enemy_name}} for {{damage}}.",
+          "Your strike opens {{enemy_name}} for {{damage}}.",
+          "You catch {{enemy_name}} cleanly for {{damage}}."
+        ],
+        "fallback": "Your blade bites {{enemy_name}} for {{damage}}."
+      },
+      {
+        "key": "attack.miss",
+        "fact_slots": [
+          "margin"
+        ],
+        "variants": [
+          "Your blade skids off the pauldron (miss by {{margin}}).",
+          "Steel scrapes stone; you miss by {{margin}}.",
+          "Your swing cuts air (miss by {{margin}}).",
+          "The strike glances wide; miss by {{margin}}."
+        ],
+        "fallback": "Your blade skids off the pauldron (miss by {{margin}})."
+      },
+      {
+        "key": "shove.success",
+        "fact_slots": [],
+        "variants": [
+          "You drive the Captain beneath the cracked dome."
+        ],
+        "fallback": "You drive the Captain beneath the cracked dome."
+      },
+      {
+        "key": "shove.fail",
+        "fact_slots": [],
+        "variants": [
+          "The Captain holds the doorway; your shove fails."
+        ],
+        "fallback": "The Captain holds the doorway; your shove fails."
+      },
+      {
+        "key": "brace.success",
+        "fact_slots": [],
+        "variants": [
+          "You brace; the blow meets your stance."
+        ],
+        "fallback": "You brace; the blow meets your stance."
+      },
+      {
+        "key": "throw.interrupt",
+        "fact_slots": [],
+        "variants": [
+          "The thrown item breaks the declared intent."
+        ],
+        "fallback": "The thrown item breaks the declared intent."
+      },
+      {
+        "key": "hazard.trigger",
+        "fact_slots": [],
+        "variants": [
+          "Stone slams down on the Captain."
+        ],
+        "fallback": "Stone slams down on the Captain."
+      },
+      {
+        "key": "clock.tick",
+        "fact_slots": [],
+        "variants": [
+          "The patrol presses closer."
+        ],
+        "fallback": "The patrol presses closer."
+      },
+      {
+        "key": "clock.threshold",
+        "fact_slots": [],
+        "variants": [
+          "Bootsteps answer from beyond the stone."
+        ],
+        "fallback": "Bootsteps answer from beyond the stone."
+      },
+      {
+        "key": "clue.reveal",
+        "fact_slots": [],
+        "variants": [
+          "A clue settles into place."
+        ],
+        "fallback": "A clue settles into place."
+      },
+      {
+        "key": "fact.payoff",
+        "fact_slots": [],
+        "variants": [
+          "Mira, the chart, and the dome agree: the Captain can be shoved beneath the collapse."
+        ],
+        "fallback": "Mira, the chart, and the dome agree: the Captain can be shoved beneath the collapse."
+      },
+      {
+        "key": "terminal.victory",
+        "fact_slots": [],
+        "variants": [
+          "Vault cleared — Mira, the chart, and the dome agree about the Captain’s guard."
+        ],
+        "fallback": "Vault cleared — Mira, the chart, and the dome agree about the Captain’s guard."
+      },
+      {
+        "key": "terminal.death",
+        "fact_slots": [
+          "cause"
+        ],
+        "variants": [
+          "You fall to {{cause}}."
+        ],
+        "fallback": "You fall to {{cause}}."
+      },
+      {
+        "key": "terminal.retry",
+        "fact_slots": [],
+        "variants": [
+          "Retry: read the telegraph, then brace, throw, or shove."
+        ],
+        "fallback": "Retry: read the telegraph, then brace, throw, or shove."
+      },
+      {
+        "key": "clue.mira",
+        "fact_slots": [],
+        "variants": [
+          "Mira says the Captain always braces in the vault doorway."
+        ],
+        "fallback": "Mira says the Captain always braces in the vault doorway."
+      },
+      {
+        "key": "clue.chart",
+        "fact_slots": [],
+        "variants": [
+          "The star chart aligns the dome crack over the vault doorway."
+        ],
+        "fallback": "The star chart aligns the dome crack over the vault doorway."
+      },
+      {
+        "key": "clue.dome",
+        "fact_slots": [],
+        "variants": [
+          "The dome fracture points over the vault approach."
+        ],
+        "fallback": "The dome fracture points over the vault approach."
+      },
+      {
+        "key": "object.compass",
+        "fact_slots": [],
+        "variants": [
+          "The stone compass points along the dome crack toward the vault."
+        ],
+        "fallback": "The stone compass points along the dome crack toward the vault."
+      },
+      {
+        "key": "hazard.observatory",
+        "fact_slots": [],
+        "variants": [
+          "Stone breaks loose from the collapsed dome."
+        ],
+        "fallback": "Stone breaks loose from the collapsed dome."
+      },
+      {
+        "key": "item.use.bowl",
+        "fact_slots": [
+          "amount"
+        ],
+        "variants": [
+          "The bowl restores {{amount}} HP."
+        ],
+        "fallback": "The bowl restores {{amount}} HP."
+      }
+    ]
+  },
+  "meta": {
+    "authoring_receipt": "M1.7 rework: Mira is a room object; the ring enables her route clue; three clue sources occupy three reachable rooms."
+  }
+}

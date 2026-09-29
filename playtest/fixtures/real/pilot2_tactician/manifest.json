@@ -1,0 +1,13 @@
+{
+  "character_class": "fighter",
+  "created_at": "2026-09-29T02:24:49.548243+00:00",
+  "created_by": "controller",
+  "game_sha": "99c703f3811a37497e19f48f0d211759508e3746",
+  "harness_sha": "99c703f3811a37497e19f48f0d211759508e3746",
+  "name": "Ada",
+  "narrator_policy": "plain",
+  "persona_id": "tactician",
+  "schema_version": 1,
+  "seed": 42,
+  "session_id": "session"
+}

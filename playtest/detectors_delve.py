@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 import re
 import time
 from unittest.mock import patch
+from pathlib import Path
 
 from .schema import SEVERITY_TAXONOMY, count_turns
 
@@ -30,39 +32,149 @@ def _add(out, mode, row, quote, rationale):
         out.append(_instance(mode, [row["turn_id"]], quote, rationale))
 
 
+REFUSAL_KEYS = {
+    # Parser-level refusals: the command or requested target was not understood.
+    "parse.unknown_verb", "target.unknown", "target.ambiguous",
+    # Valid commands refused because their target/object cannot be acted on now.
+    "target.not_held", "move.no_exit", "move.blocked", "get.blocked",
+    "get.not_takeable", "use.nothing",
+}
+
+# Classification is intentionally exhaustive (checked against the current pack
+# in tests). throw.fizzle is a consequence: the item is spent and the enemy's
+# attack still resolves, so its message must not suppress consequence checks.
+NOT_A_REFUSAL = {
+    "room.entry": "Scene description; it does not reject a player request.",
+    "room.observatory": "Scene description; it does not reject a player request.",
+    "room.chart_chamber": "Scene description; it does not reject a player request.",
+    "room.gallery": "Scene description; it does not reject a player request.",
+    "room.vault": "Scene description; it does not reject a player request.",
+    "room.enter": "Movement consequence and room arrival narration.",
+    "room.return": "Arrival narration after returning to a room.",
+    "object.read": "Successful object inspection output.",
+    "item.get": "Successful inventory change.",
+    "intent.goblin.grab": "Enemy intent telegraph, not a player-action refusal.",
+    "intent.goblin.strike": "Enemy intent telegraph, not a player-action refusal.",
+    "intent.captain.guard": "Enemy intent telegraph, not a player-action refusal.",
+    "intent.captain.smash": "Enemy intent telegraph, not a player-action refusal.",
+    "attack.hit": "Combat resolution with a mechanical consequence.",
+    "attack.miss": "Combat resolution with a mechanical consequence.",
+    "shove.success": "Combat resolution with a mechanical consequence.",
+    "shove.fail": "Combat resolution with an attempted action resolution.",
+    "brace.success": "Combat resolution of the defensive action.",
+    "throw.interrupt": "Combat resolution; the enemy's attack is interrupted.",
+    "hazard.trigger": "Hazard consequence applied by the engine.",
+    "clock.tick": "Persistent world clock consequence.",
+    "clock.threshold": "Persistent world clock threshold consequence.",
+    "clue.reveal": "Successful information discovery.",
+    "fact.payoff": "Successful discovery payoff with actionable information.",
+    "terminal.victory": "Terminal success state and victory narration.",
+    "terminal.death": "Terminal failure state and cause narration.",
+    "terminal.retry": "Retry guidance after a terminal outcome.",
+    "clue.mira": "Successful clue discovery.",
+    "clue.chart": "Successful clue discovery.",
+    "clue.dome": "Successful clue discovery.",
+    "inventory": "Successful query response listing inventory.",
+    "help": "Successful query response listing commands.",
+    "terminal.quit": "Terminal quit response.",
+    "brace.wasted": "Action resolves as a defensive attempt without an intent to meet.",
+    "throw.fizzle": "Consequence: the throw changes the encounter and the enemy attack proceeds.",
+    "intent.cancelled": "Enemy intent state change caused by combat.",
+    "enemy.hit": "Enemy combat resolution with a mechanical consequence.",
+    "enemy.miss": "Enemy combat resolution with a mechanical consequence.",
+    "retreat.blocked": "Combat retreat resolution, governed by the encounter state.",
+    "terminal.closed": "Terminal response after the game closes.",
+    "enemy.defeated": "Combat consequence that changes enemy state.",
+    "throw.cup": "Successful item-specific throw narration and combat effect.",
+    "throw.leaf": "Successful item-specific throw narration and combat effect.",
+    "clock.threshold.patrol.2": "Persistent world clock threshold consequence.",
+    "clock.threshold.patrol.4": "Persistent world clock threshold consequence.",
+    "object.compass": "Successful object inspection output.",
+    "item.use.bowl": "Successful item use narration or effect.",
+    "item.use.ring": "Successful item use narration or effect.",
+    "object.nameplate": "Successful object inspection output.",
+    "object.ring": "Successful object inspection output.",
+    "object.dome": "Successful object inspection output.",
+    "object.bell": "Successful object inspection output.",
+    "object.chart": "Successful object inspection output.",
+    "object.cup": "Successful object inspection output.",
+    "object.leaf": "Successful object inspection output.",
+    "object.bowl": "Successful object inspection output.",
+}
+
+
 def _bank_entries():
-    from pathlib import Path
     from delve.pack import load_engine_ready_pack
     pack = load_engine_ready_pack(Path(__file__).resolve().parents[1] / "delve" / "content" / "mossy_fast_slice.json")
     return {entry.key: entry for entry in pack.bank}, pack
 
 
 def _template_pattern(template):
-    escaped = re.escape(template)
-    escaped = re.sub(r"\\{\\{[a-zA-Z0-9_]+\\}\\}", r".+?", escaped)
-    return re.compile("^" + escaped + "$", re.I)
+    """Escape authored text while treating each {{slot}} as a lazy wildcard."""
+    chunks = re.split(r"({{[a-zA-Z0-9_]+}})", template)
+    pattern = "".join(r".+?" if re.fullmatch(r"{{[a-zA-Z0-9_]+}}", chunk)
+                      else re.escape(chunk) for chunk in chunks)
+    # The line may have renderer-added text following a bank message. Refusal
+    # recognition only trusts a bank phrase at the start of a response line.
+    return re.compile("^" + pattern, re.I)
 
 
-def _refusal_patterns():
-    bank, _ = _bank_entries()
-    patterns = []
-    for key in ("parse.unknown_verb", "target.unknown", "target.ambiguous"):
-        entry = bank[key]
-        patterns.extend(_template_pattern(value) for value in (*entry.variants, entry.fallback))
-    # Engine refusals are authored outside the response bank.
-    patterns.extend(re.compile(p, re.I) for p in (
-        r"^Not with the .+ watching your hands\\.?$",
-        r"^Loot later\\. The .+ is still up\\.?$",
-        r"^Try leaving once the .+ stops breathing\\.?$",
-        r"^Walking out\\? The .+ has opinions about that\\.?$",
-        r"^Not portable: .+\\.?$",
-        r"^That doesn.t come with you; .+ stays put\\.?$",
-        r"^No retreat from here\\..+$",
-        r"^Nothing here answers to .+$", r"^No .+ within reach\\.?$",
-        r"^You look for .+ and find floor\\.?$", r"^Search turns up no .+$",
-        r"^Whatever .+ is, it isn.t here\\.?$", r"^Empty hands\\..+$",
-    ))
-    return patterns
+def refusal_templates(pack):
+    """Compile all variants (and fallback-only text) for classified refusals."""
+    if hasattr(pack, "bank"):
+        entries = pack.bank
+    elif "bank" in pack:
+        bank = pack["bank"]
+        entries = bank.get("entries", ()) if isinstance(bank, dict) else bank
+    else:
+        entries = pack.get("entries", ())
+    result = []
+    for entry in entries:
+        key = entry.key if hasattr(entry, "key") else entry["key"]
+        if key not in REFUSAL_KEYS:
+            continue
+        variants = entry.variants if hasattr(entry, "variants") else entry.get("variants", ())
+        fallback = entry.fallback if hasattr(entry, "fallback") else entry.get("fallback", "")
+        for template in dict.fromkeys((*variants, fallback)):
+            if template:
+                result.append(_template_pattern(template))
+    return result
+
+
+def _legacy_bank_for_game_sha(game_sha):
+    """Resolve a recorded game build to the bank bytes named by its manifest."""
+    from .fixtures_delve import content_sha_for_game_sha, legacy_bank_path
+    content_sha = content_sha_for_game_sha(game_sha)
+    path = legacy_bank_path(content_sha) if content_sha else None
+    if path is None:
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def _pack_for_records(records, current_pack):
+    game_shas = {row.get("game_sha") for row in records if row.get("game_sha")}
+    if not game_shas:
+        return current_pack
+    if len(game_shas) != 1:
+        return None
+    game_sha = next(iter(game_shas))
+    # The running checkout itself is a known build and uses the loaded current
+    # pack. This also covers fresh harness replays whose manifest is not archived.
+    from .schema import source_manifest
+    root = Path(__file__).resolve().parents[1]
+    if source_manifest(root, "game", game_id="delve")["sha256"] == game_sha:
+        return current_pack
+    bank = _legacy_bank_for_game_sha(game_sha)
+    if bank is None:
+        return None
+    return bank
 
 
 def _is_refusal(text, patterns):
@@ -125,8 +237,14 @@ def run_all_delve(records, journal=None, content=None, receipt=None):
     if isinstance(journals, dict):
         journals = list(journals.values())
     journals = {item.get("turn_id"): item for item in journals}
-    refusals = _refusal_patterns()
     _, loaded_pack = _bank_entries()
+    transcript_pack = _pack_for_records(records, loaded_pack)
+    refusals = refusal_templates(transcript_pack) if transcript_pack is not None else []
+    if transcript_pack is None and records:
+        out.notes.append({"kind": "INCONCLUSIVE", "mode": "UNRECOGNIZED_COMMAND",
+                          "turn_ids": [], "quote": "",
+                          "rationale": "refusal templates unavailable for this build",
+                          "detector_version": DETECTOR_VERSION_DELVE})
     enemy_rooms = {enemy.id: enemy.room_id for enemy in loaded_pack.enemies}
     informative = re.compile(r"reveals|you discover|you learn|you notice|you find out|can be opened|the clue|the warning|points toward|shows you|remembered what", re.I)
     resolution = re.compile(r"solid hit:|\bhit\.|a miss\.|nothing lands\.|takes \d+ (?:damage|out of you)|\d+ damage|braced:|you make yourself a wall|you heft|the fight leaves|goes down", re.I)
@@ -134,7 +252,7 @@ def run_all_delve(records, journal=None, content=None, receipt=None):
     for i, row in enumerate(records):
         text = row.get("new_output", "")
         refusal_line = next((line.strip() for line in text.splitlines()
-                             if any(p.search(line.strip()) for p in refusals)), "")
+                             if any(p.match(line.strip()) for p in refusals)), "")
         if refusal_line:
             _add(out, "UNRECOGNIZED_COMMAND", row, refusal_line,
                  "The game refused an unknown verb, target, or unavailable action.")

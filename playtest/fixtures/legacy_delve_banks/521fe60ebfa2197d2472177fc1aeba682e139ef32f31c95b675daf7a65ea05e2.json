@@ -1,0 +1,929 @@
+{
+  "entries": [
+    {
+      "key": "room.entry",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "Rain needles through the roots of the {{room_name}} and beads on the moss. Dry air breathes from the east."
+      ],
+      "fallback": "Rain needles through the roots of the {{room_name}} and beads on the moss. Dry air breathes from the east."
+    },
+    {
+      "key": "room.observatory",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "Half the dome of the {{room_name}} is on the floor. The other half is thinking about it."
+      ],
+      "fallback": "Half the dome of the {{room_name}} is on the floor. The other half is thinking about it."
+    },
+    {
+      "key": "room.chart_chamber",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "Dust furs the bell, compass, and star chart of the {{room_name}}. The bell’s clapper is gone."
+      ],
+      "fallback": "Dust furs the bell, compass, and star chart of the {{room_name}}. The bell’s clapper is gone."
+    },
+    {
+      "key": "room.gallery",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. She knows the vault."
+      ],
+      "fallback": "The {{room_name}} is hers, and so is the empty ring groove on the nameplate. Mira wants it filled. She knows the vault."
+    },
+    {
+      "key": "room.vault",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "A split arch frames the doorway of the {{room_name}}; the stone above is cracked like an egg."
+      ],
+      "fallback": "A split arch frames the doorway of the {{room_name}}; the stone above is cracked like an egg."
+    },
+    {
+      "key": "room.enter",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "You enter the {{room_name}}.",
+        "Through the arch: {{room_name}}.",
+        "{{room_name}}. New air, new problems.",
+        "Boots on unfamiliar stone: the {{room_name}}.",
+        "New ground: {{room_name}}. Eyes up.",
+        "One step, and the {{room_name}} opens around you.",
+        "First time in the {{room_name}}. It smells older than the last room."
+      ],
+      "fallback": "You enter the {{room_name}}."
+    },
+    {
+      "key": "room.return",
+      "fact_slots": [
+        "room_name"
+      ],
+      "variants": [
+        "Back in the {{room_name}}.",
+        "{{room_name}} again. Your old footprints are still in the dust.",
+        "You double back to the {{room_name}}.",
+        "Retracing: {{room_name}}.",
+        "The way back ends in the {{room_name}}.",
+        "Familiar stone: the {{room_name}}. You know where the dust is thin.",
+        "The {{room_name}}, much as you left it. Mostly."
+      ],
+      "fallback": "Back in the {{room_name}}."
+    },
+    {
+      "key": "object.read",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "Close look: {{object_name}}.",
+        "You take your time with this one: {{object_name}}.",
+        "Examined, carefully: {{object_name}}.",
+        "Details, then more details: {{object_name}}.",
+        "You look, then look again: {{object_name}}.",
+        "Nothing rushed. Subject: {{object_name}}.",
+        "Full attention, no hurry: {{object_name}}."
+      ],
+      "fallback": "Close look: {{object_name}}."
+    },
+    {
+      "key": "item.get",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "Pocketed: the {{item_name}}.",
+        "The {{item_name}} comes loose with a dry scrape. Yours now.",
+        "You take the {{item_name}} and keep your hand on it a moment.",
+        "Into your pack: the {{item_name}}.",
+        "Got it. The {{item_name}}, cold from the stone.",
+        "The {{item_name}} is yours. Down here, everything is for something.",
+        "Snatched up: the {{item_name}}. The room feels one thing lighter."
+      ],
+      "fallback": "Pocketed: the {{item_name}}."
+    },
+    {
+      "key": "intent.goblin.grab",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "{{enemy_name}}: fingers spread for your collar. Brace, or shove it off.",
+        "{{enemy_name}}: low crouch, hands open. It wants to hold you. Dig in.",
+        "{{enemy_name}}: a grab is coming. Plant your feet or push it away.",
+        "{{enemy_name}}: lunging to latch on. Brace, shove, or hit it first.",
+        "{{enemy_name}}: grabby hands, bad breath, clear plan. Shove first.",
+        "{{enemy_name}}: reaching to pin you. Braced, you can’t be held.",
+        "{{enemy_name}}: hands hooked for a hold. Strike first or plant yourself."
+      ],
+      "fallback": "{{enemy_name}}: fingers spread for your collar. Brace, or shove it off."
+    },
+    {
+      "key": "intent.goblin.strike",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "{{enemy_name}}: arm cocked, weight forward. A strike is coming; brace or shove.",
+        "{{enemy_name}}: teeth bared, shoulder dropping. Braced, it only half hurts.",
+        "{{enemy_name}}: measuring your ribs. Shove it off-line or take it braced.",
+        "{{enemy_name}}: a fast, ugly swing, telegraphed like a shout. Dig in or push.",
+        "{{enemy_name}}: coiled to hit. A shove now wastes the whole swing.",
+        "{{enemy_name}}: hop, feint, commit. The real swing comes next. Brace.",
+        "{{enemy_name}}: squared up to strike. Hit first, or halve it with a brace."
+      ],
+      "fallback": "{{enemy_name}}: arm cocked, weight forward. A strike is coming; brace or shove."
+    },
+    {
+      "key": "intent.captain.guard",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "{{enemy_name}}: forearms locked, chin down. A thrown silver leaf opens that.",
+        "{{enemy_name}}: turtled behind both arms. Bracing is wasted; throw something silver.",
+        "{{enemy_name}}: a wall of knuckles. Don’t push it. Distract it.",
+        "{{enemy_name}}: guard up, patient as masonry. Silver in his eyes breaks it.",
+        "{{enemy_name}}: waiting behind his guard for you to waste a turn.",
+        "{{enemy_name}}: all elbows and patience. Shoves bounce; attacks strain.",
+        "{{enemy_name}}: pure defense this turn. Attack at a cost, or throw the leaf."
+      ],
+      "fallback": "{{enemy_name}}: forearms locked, chin down. A thrown silver leaf opens that."
+    },
+    {
+      "key": "intent.captain.smash",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "{{enemy_name}}: both fists climbing overhead. Brace, or shove him somewhere heavy.",
+        "{{enemy_name}}: a two-fisted smash is coming. Braced, you walk away from it.",
+        "{{enemy_name}}: fists up, doorway at his back, cracked stone above. Think.",
+        "{{enemy_name}}: fists high, breath held. Brace eats it; a shove might bury him.",
+        "{{enemy_name}}: winding up like a man with exactly one plan. Dig in.",
+        "{{enemy_name}}: all weight, no footwork. Easy to shove, if you know where.",
+        "{{enemy_name}}: fists raised to fold you. Brace, or give the ceiling its turn."
+      ],
+      "fallback": "{{enemy_name}}: both fists climbing overhead. Brace, or shove him somewhere heavy."
+    },
+    {
+      "key": "attack.hit",
+      "fact_slots": [
+        "enemy_name",
+        "damage"
+      ],
+      "variants": [
+        "You connect. The {{enemy_name}} loses {{damage}}.",
+        "Solid hit: {{damage}} into the {{enemy_name}}.",
+        "The {{enemy_name}} staggers. {{damage}} damage, cleanly delivered.",
+        "Thock. {{damage}} damage, and the {{enemy_name}} felt every point.",
+        "You find the gap and put {{damage}} into the {{enemy_name}}.",
+        "Hit. The {{enemy_name}} grunts and gives up {{damage}}.",
+        "Your blow lands flush on the {{enemy_name}}: {{damage}} damage."
+      ],
+      "fallback": "You connect. The {{enemy_name}} loses {{damage}}."
+    },
+    {
+      "key": "attack.miss",
+      "fact_slots": [
+        "margin"
+      ],
+      "variants": [
+        "Close. You miss by {{margin}}.",
+        "Air. Short by {{margin}}.",
+        "Deflected. You needed {{margin}} more.",
+        "Your blow skids off a raised forearm, {{margin}} short.",
+        "The gap was there. You missed it by {{margin}}.",
+        "Stone takes the hit instead. Miss by {{margin}}.",
+        "It slips aside: short by {{margin}}, and it knows it."
+      ],
+      "fallback": "Close. You miss by {{margin}}."
+    },
+    {
+      "key": "shove.success",
+      "fact_slots": [],
+      "variants": [
+        "You drive your shoulder in. The attack dies before it starts.",
+        "Shove. Your enemy stumbles back, the whole move spoiled.",
+        "Both hands, full weight. You send them reeling.",
+        "You shove first, and their momentum goes somewhere else.",
+        "A hard push, and the space between you is yours again.",
+        "Heel of the hand, hip behind it. They go staggering back.",
+        "You break their footing; the planned blow never arrives."
+      ],
+      "fallback": "You drive your shoulder in. The attack dies before it starts."
+    },
+    {
+      "key": "shove.fail",
+      "fact_slots": [],
+      "variants": [
+        "You shove; the Captain absorbs it like a wall absorbs weather.",
+        "Nothing moves. The Captain barely notices.",
+        "He rocks, resets, and the doorway stays his.",
+        "Your push goes nowhere. Pushing him without a reason is just leaning.",
+        "Wrong moment for a shove. He is rooted, and you are open.",
+        "All weight, no result. His boots never leave the stone.",
+        "A shove needs a better moment, or a better reason."
+      ],
+      "fallback": "You shove; the Captain absorbs it like a wall absorbs weather."
+    },
+    {
+      "key": "brace.success",
+      "fact_slots": [],
+      "variants": [
+        "You drop your weight and set your feet. Let it come.",
+        "Braced: knees soft, shoulders square, chin tucked.",
+        "You dig in. The worst of it has nowhere to land.",
+        "Feet planted, guard high. You give the blow nothing easy.",
+        "You make yourself a wall and wait for the impact.",
+        "Rooted before it lands. The blow meets bone and balance, not surprise.",
+        "Heels down, elbows in. Whatever comes, you absorb it."
+      ],
+      "fallback": "You drop your weight and set your feet. Let it come."
+    },
+    {
+      "key": "throw.interrupt",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "The {{item_name}} lands right in the middle of their plan.",
+        "Perfect timing: the {{item_name}} breaks their focus.",
+        "A flinch, a glance, a gap. The {{item_name}} bought all three.",
+        "The {{item_name}} arrives at exactly the wrong moment, for them.",
+        "Eyes follow the {{item_name}}. That is all you needed.",
+        "Clean interrupt. The {{item_name}} did its work."
+      ],
+      "fallback": "The {{item_name}} lands right in the middle of their plan."
+    },
+    {
+      "key": "hazard.trigger",
+      "fact_slots": [],
+      "variants": [
+        "The cracked ceiling lets go. Stone comes down on the Captain.",
+        "A groan overhead, then thunder. The dome drops onto the Captain.",
+        "Stone falls like a verdict, and the Captain is under it.",
+        "Crack, roar, dust. The ceiling finishes what your shove started.",
+        "The doorway’s cracked stone finally falls: on the Captain, not you.",
+        "Everything above the Captain comes down at once.",
+        "Grit, then slabs. The ceiling was waiting for him to stand there."
+      ],
+      "fallback": "The cracked ceiling lets go. Stone comes down on the Captain."
+    },
+    {
+      "key": "clock.tick",
+      "fact_slots": [
+        "clock_label",
+        "value",
+        "max"
+      ],
+      "variants": [
+        "{{clock_label}} {{value}} of {{max}}. Boots, far off, keeping time.",
+        "{{clock_label}} {{value}} of {{max}}. Somewhere behind you, a lantern swings.",
+        "Distant voices, then quiet. {{clock_label}} at {{value}} of {{max}}.",
+        "{{clock_label}} {{value}} of {{max}}: lantern light brushes a far wall, then pulls back.",
+        "Boots on stone, closer than before. {{clock_label}}: {{value}} of {{max}}.",
+        "A laugh echoes down the passage. {{clock_label}} climbs to {{value}} of {{max}}."
+      ],
+      "fallback": "{{clock_label}} {{value}} of {{max}}. Boots, far off, keeping time."
+    },
+    {
+      "key": "clock.threshold",
+      "fact_slots": [
+        "clock_label",
+        "at"
+      ],
+      "variants": [
+        "{{clock_label}} hits {{at}}. The voices stop talking and start listening.",
+        "{{clock_label}} at {{at}}: lantern light swings your way, and holds.",
+        "{{clock_label}} reaches {{at}}. Somebody out there says your direction out loud.",
+        "At {{at}}, {{clock_label}} turns: the boots break into a run.",
+        "{{clock_label}} {{at}}. The light in the passage stops searching and starts aiming.",
+        "{{clock_label}} climbs to {{at}}, and the dark starts answering your footsteps."
+      ],
+      "fallback": "{{clock_label}} hits {{at}}. The voices stop talking and start listening."
+    },
+    {
+      "key": "clue.reveal",
+      "fact_slots": [],
+      "variants": [
+        "Another piece. It fits.",
+        "That detail goes in your pocket with the others.",
+        "The route stops being a guess, one fact at a time.",
+        "Noted. It points the same way as everything else.",
+        "Small fact, sharp edges. Keep it."
+      ],
+      "fallback": "Another piece. It fits."
+    },
+    {
+      "key": "fact.payoff",
+      "fact_slots": [
+        "fact_label"
+      ],
+      "variants": [
+        "It clicks. {{fact_label}}",
+        "Three clues, one answer: {{fact_label}}",
+        "Doorway, fracture, falling stone. {{fact_label}}",
+        "Now you know. {{fact_label}}",
+        "You have a plan now: {{fact_label}}",
+        "The pieces lock together. {{fact_label}}"
+      ],
+      "fallback": "It clicks. {{fact_label}}"
+    },
+    {
+      "key": "terminal.victory",
+      "fact_slots": [],
+      "variants": [
+        "He always stood in that doorway, under stone that was always going to fall. You noticed.",
+        "Mira named the doorway, the chart marked the fracture, the dome proved it would fall. You connected them.",
+        "Three clues, one doorway, one ceiling waiting to drop. You read it right.",
+        "You worked it out: his favorite doorway sat under the dome’s broken seam.",
+        "Habit, fracture, falling stone. You put them together, and the vault is yours."
+      ],
+      "fallback": "He always stood in that doorway, under stone that was always going to fall. You noticed."
+    },
+    {
+      "key": "terminal.death",
+      "fact_slots": [
+        "cause"
+      ],
+      "variants": [
+        "Cause of death: {{cause}}.",
+        "The last thing you register: {{cause}}. Then cold stone, and quiet.",
+        "Final entry: {{cause}}. The delve keeps your boots.",
+        "You hit the floor and stay there. Blame: {{cause}}.",
+        "The dark closes over you. Recorded cause: {{cause}}.",
+        "That was the one that mattered: {{cause}}."
+      ],
+      "fallback": "Cause of death: {{cause}}."
+    },
+    {
+      "key": "terminal.retry",
+      "fact_slots": [],
+      "variants": [
+        "Brace when the fists rise; throw silver when the guard goes up.",
+        "Mira, the star chart, and the dome each hold a piece. Collect all three before the vault.",
+        "Every move feeds the patrol. Take the short way, and look before you walk.",
+        "Read the telegraph, then answer it: brace the heavy blow, shove the swing.",
+        "Give Mira her ring, then look at her. She knows where the Captain stands.",
+        "Pick up the silver leaf in the gallery. His guard hates it.",
+        "Save the offering bowl for the vault. One swallow can decide the fight."
+      ],
+      "fallback": "Brace when the fists rise; throw silver when the guard goes up."
+    },
+    {
+      "key": "clue.mira",
+      "fact_slots": [],
+      "variants": [
+        "“He plants himself in the vault doorway,” Mira says. “Every fight. Predictable men are a public service.”",
+        "Mira lowers her voice. “He picked that doorway so nothing could get behind him. He never looked up.”",
+        "“Watch his feet,” Mira says. “He never leaves the vault doorway. He thinks the arch protects him.”",
+        "Mira taps the nameplate. “Same doorway, same stance, every time. A habit is just a trap nobody has sprung.”",
+        "“Doorway,” Mira says, like that is the whole answer. “He stands in it. Always. Build around that.”",
+        "Mira does not blink. “The Captain holds the vault doorway, always. Stubbornness is his armor. Also his flaw.”"
+      ],
+      "fallback": "“He plants himself in the vault doorway,” Mira says. “Every fight. Predictable men are a public service.”"
+    },
+    {
+      "key": "clue.chart",
+      "fact_slots": [],
+      "variants": [
+        "Inked lines, old and exact: the dome’s fracture runs straight to the vault doorway.",
+        "The alignment is unmistakable. Whatever falls from that crack falls on the vault doorway.",
+        "Someone measured this long ago: the weak stone hangs right over the doorway to the vault.",
+        "The fracture has a destination, and it is the vault doorway.",
+        "Star to star, crack to arch: the line ends above the vault doorway.",
+        "Mapped and marked: the ceiling’s weakest point sits over the vault doorway."
+      ],
+      "fallback": "Inked lines, old and exact: the dome’s fracture runs straight to the vault doorway."
+    },
+    {
+      "key": "clue.dome",
+      "fact_slots": [],
+      "variants": [
+        "The ceiling is one push from falling, and the Captain knows it. That is why the bell stays quiet.",
+        "Stone that falls once falls twice. The bell used to say so; now it can’t.",
+        "One good jolt would bring the rest down. Whoever silenced the bell knew that.",
+        "Grit still trickles from the cracks. The Captain wanted no warning when it gives.",
+        "Loose stone, held up by habit, and no bell left to warn anyone beneath it.",
+        "The Captain fears that ceiling. Men who fear a thing silence its warnings."
+      ],
+      "fallback": "The ceiling is one push from falling, and the Captain knows it. That is why the bell stays quiet."
+    },
+    {
+      "key": "object.compass",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} ignores north. Its needle drifts, then settles on the vault.",
+        "Grit grinds as the {{object_name}} swings, and stops pointing anywhere sensible.",
+        "The {{object_name}} has a stone needle and one stubborn opinion.",
+        "Carved on the {{object_name}}: a dome, a crack, an arrow.",
+        "Spin the {{object_name}} however you like; the needle keeps finding the same spot.",
+        "The {{object_name}} was never for finding north."
+      ],
+      "fallback": "The {{object_name}} ignores north. Its needle drifts, then settles on the vault."
+    },
+    {
+      "key": "item.use.bowl",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "You drain the {{item_name}}. Warm, bitter, and your hands stop shaking.",
+        "One swallow from the {{item_name}}, and your breathing steadies.",
+        "Rainwater and old prayers. The {{item_name}} is empty; you are steadier.",
+        "You drink the {{item_name}} dry. The ache in your ribs backs off.",
+        "It tastes of copper. The {{item_name}} is spent, and you stand straighter.",
+        "The last mouthful in the {{item_name}} goes down warm. It will have to do."
+      ],
+      "fallback": "You drain the {{item_name}}. Warm, bitter, and your hands stop shaking."
+    },
+    {
+      "key": "get.blocked",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "Not with the {{enemy_name}} watching your hands.",
+        "You reach; the {{enemy_name}} leans in. Hand back.",
+        "Loot later. The {{enemy_name}} is still up.",
+        "Bend down now and the {{enemy_name}} gets your neck.",
+        "The {{enemy_name}} first, souvenirs second.",
+        "Picking things up mid-fight? The {{enemy_name}} would love that."
+      ],
+      "fallback": "Not with the {{enemy_name}} watching your hands."
+    },
+    {
+      "key": "get.not_takeable",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "Not portable: {{object_name}}.",
+        "Stays here: {{object_name}}. Looking is free.",
+        "That doesn’t come with you; {{object_name}} stays put.",
+        "Your pack has no room for {{object_name}}.",
+        "Not coming with you: {{object_name}}.",
+        "Hands off. That stays: {{object_name}}."
+      ],
+      "fallback": "Not portable: {{object_name}}."
+    },
+    {
+      "key": "use.nothing",
+      "fact_slots": [],
+      "variants": [
+        "Nothing happens. Wrong place, or wrong thing.",
+        "You try it. The world declines.",
+        "No effect. Maybe somewhere else, maybe for someone else.",
+        "Nothing clicks. This belongs to a different moment.",
+        "You fiddle with it. Useless here.",
+        "Not here. Some things only work in the right company.",
+        "It does nothing. Down here, things are for throwing or for giving."
+      ],
+      "fallback": "Nothing happens. Wrong place, or wrong thing."
+    },
+    {
+      "key": "item.use.ring",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "Mira presses the {{item_name}} into the nameplate’s empty groove. It fits like it never left. “Fine. Look at me.”",
+        "Mira takes the {{item_name}} without a word of thanks, which from her is thanks. “Now look at me. Once.”",
+        "Mira checks the {{item_name}} for scratches you made, finds none, and almost smiles. “You want the vault. Look at me.”",
+        "“Took you long enough.” Mira closes her fist around the {{item_name}}. “Look here. This part matters.”",
+        "The {{item_name}} vanishes into her sleeve. “Debt settled,” Mira says. “Look at me if you want the vault.”",
+        "Mira turns the {{item_name}} over once, like a coin she expected to be fake. “Hm. Look at me, then. Properly.”"
+      ],
+      "fallback": "Mira presses the {{item_name}} into the nameplate’s empty groove. It fits like it never left. “Fine. Look at me.”"
+    },
+    {
+      "key": "object.nameplate",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring.",
+        "The {{object_name}} is spotless except for one empty ring groove, worn shiny by a checking thumb.",
+        "Mira, says the {{object_name}}. The empty groove beneath says what she is missing: a brass ring.",
+        "The {{object_name}}: one name, one empty groove. Someone took her ring. Someone could bring it back.",
+        "The {{object_name}} names Mira. Its empty groove would fit the brass ring back in the entry.",
+        "Polished brass, one name, one hole in the story: the {{object_name}}."
+      ],
+      "fallback": "Engraved on the {{object_name}}: Mira. Beneath it, an empty groove exactly the size of a brass ring."
+    },
+    {
+      "key": "move.blocked",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "Not past the {{enemy_name}}. Deal with that first.",
+        "The {{enemy_name}} fills the way out. Nobody leaves mid-fight.",
+        "You feint for the exit; the {{enemy_name}} steps into it.",
+        "Blocked. The {{enemy_name}} won’t let you walk away.",
+        "No slipping by: the {{enemy_name}} owns the gap.",
+        "Try leaving once the {{enemy_name}} stops breathing.",
+        "Walking out? The {{enemy_name}} has opinions about that."
+      ],
+      "fallback": "Not past the {{enemy_name}}. Deal with that first."
+    },
+    {
+      "key": "move.no_exit",
+      "fact_slots": [
+        "direction"
+      ],
+      "variants": [
+        "No way {{direction}}. Just wall.",
+        "Nothing leads {{direction}} from here.",
+        "Wet stone to the {{direction}}. Try another way.",
+        "Dead end: {{direction}} is all rock.",
+        "You check {{direction}}. Rock, moss, no door.",
+        "Look at the exits line again; {{direction}} isn’t on it.",
+        "The {{direction}} wall stays a wall, however hard you stare."
+      ],
+      "fallback": "No way {{direction}}. Just wall."
+    },
+    {
+      "key": "target.unknown",
+      "fact_slots": [
+        "target"
+      ],
+      "variants": [
+        "Nothing here answers to “{{target}}”.",
+        "No “{{target}}” within reach.",
+        "You look for “{{target}}” and find floor.",
+        "“{{target}}”? Not here.",
+        "Search turns up no “{{target}}”.",
+        "Whatever “{{target}}” is, it isn’t here.",
+        "Empty hands. There’s no “{{target}}” to work with."
+      ],
+      "fallback": "Nothing here answers to “{{target}}”."
+    },
+    {
+      "key": "inventory",
+      "fact_slots": [
+        "items"
+      ],
+      "variants": [
+        "You carry: {{items}}.",
+        "Pack check: {{items}}.",
+        "In hand and in pocket: {{items}}.",
+        "Everything you own down here: {{items}}."
+      ],
+      "fallback": "You carry: {{items}}."
+    },
+    {
+      "key": "help",
+      "fact_slots": [],
+      "variants": [
+        "Move n/s/e/w. Look with x, take with g, use with u, throw with t. In a fight: a, sh, b.",
+        "Read the enemy line before you act. It tells you what lands next, and what stops it.",
+        "Look at everything once. Some things talk, some things fall, one person wants a ring.",
+        "Brace heavy blows, shove swings and grabs, throw silver at a closed guard. Every move feeds the patrol."
+      ],
+      "fallback": "Move n/s/e/w. Look with x, take with g, use with u, throw with t. In a fight: a, sh, b."
+    },
+    {
+      "key": "terminal.quit",
+      "fact_slots": [],
+      "variants": [
+        "You leave the stone to its own company.",
+        "You turn your back; the dark keeps the door.",
+        "You quit while the walls are still being polite.",
+        "The delve closes behind your last step."
+      ],
+      "fallback": "You leave the stone to its own company."
+    },
+    {
+      "key": "brace.wasted",
+      "fact_slots": [],
+      "variants": [
+        "You brace against nothing. A guard doesn’t swing.",
+        "Braced and waiting. Nothing comes; the guard stays up.",
+        "Wasted turn: no blow to absorb, just a closed guard.",
+        "You dig in. Across from you, the guard never dips.",
+        "Solid stance, wrong moment. That guard wants a throw, not patience.",
+        "Your feet set. The arms opposite stay up. Stalemate, your loss.",
+        "No blow to block. That guard needs prying open, not waiting out."
+      ],
+      "fallback": "You brace against nothing. A guard doesn’t swing."
+    },
+    {
+      "key": "throw.fizzle",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "The {{item_name}} bounces off, harmless. The attack comes anyway.",
+        "Wrong throw. The {{item_name}} clatters away and nobody blinks.",
+        "The {{item_name}} skitters into the dark. You are still in trouble.",
+        "Good arm, wrong answer. The {{item_name}} changes nothing.",
+        "Swatted aside: the {{item_name}} was the wrong tool for this move.",
+        "Gone, the {{item_name}}, and the blow is still coming.",
+        "The {{item_name}} lands at their feet. Clay for hands; silver for guards."
+      ],
+      "fallback": "The {{item_name}} bounces off, harmless. The attack comes anyway."
+    },
+    {
+      "key": "intent.cancelled",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "The {{enemy_name}}’s move is gone. Your turn.",
+        "Whatever the {{enemy_name}} planned, it isn’t happening.",
+        "Rhythm broken. The {{enemy_name}} has to start over.",
+        "The {{enemy_name}} resets, empty-handed.",
+        "The declared move dies in the {{enemy_name}}’s hands.",
+        "Plan spoiled. The {{enemy_name}} regroups for something new.",
+        "One threat from the {{enemy_name}}, erased."
+      ],
+      "fallback": "The {{enemy_name}}’s move is gone. Your turn."
+    },
+    {
+      "key": "enemy.hit",
+      "fact_slots": [
+        "enemy_name",
+        "damage"
+      ],
+      "variants": [
+        "It lands. The {{enemy_name}} takes {{damage}} out of you.",
+        "Ribs. {{damage}} damage from the {{enemy_name}}.",
+        "The {{enemy_name}} connects; you lose {{damage}} and most of your breath.",
+        "Pain first, then the number: {{damage}}. The {{enemy_name}} got through.",
+        "You eat the hit. {{damage}} damage, courtesy of the {{enemy_name}}.",
+        "The {{enemy_name}} finds you: {{damage}} damage, and your ears ring.",
+        "Knuckles and stone. The {{enemy_name}} costs you {{damage}}."
+      ],
+      "fallback": "It lands. The {{enemy_name}} takes {{damage}} out of you."
+    },
+    {
+      "key": "enemy.miss",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "The {{enemy_name}} misses. Wind on your cheek, nothing more.",
+        "You twist; the {{enemy_name}} hits nothing but room.",
+        "Close. The {{enemy_name}} overcommits and finds air.",
+        "Whump: stone, not you. The {{enemy_name}} missed.",
+        "Nothing lands. The {{enemy_name}} resets, annoyed.",
+        "The {{enemy_name}} swings through the space you just left.",
+        "A miss. The {{enemy_name}} grunts at the floor it hit instead."
+      ],
+      "fallback": "The {{enemy_name}} misses. Wind on your cheek, nothing more."
+    },
+    {
+      "key": "retreat.blocked",
+      "fact_slots": [],
+      "variants": [
+        "No retreat from here. You need the doorway and an open way back.",
+        "You can’t break away; the fight has you by the collar.",
+        "Wrong footing for a retreat. Get to the doorway first.",
+        "Backing off isn’t an option this turn.",
+        "The way out is shut, or you’re standing in the wrong place."
+      ],
+      "fallback": "No retreat from here. You need the doorway and an open way back."
+    },
+    {
+      "key": "terminal.closed",
+      "fact_slots": [],
+      "variants": [
+        "This run is over. Retry or quit.",
+        "Nothing more moves in this delve.",
+        "The last choice has already been made.",
+        "The room holds still. The run is done."
+      ],
+      "fallback": "This run is over. Retry or quit."
+    },
+    {
+      "key": "enemy.defeated",
+      "fact_slots": [
+        "enemy_name"
+      ],
+      "variants": [
+        "The {{enemy_name}} goes down and stays down.",
+        "Down. The {{enemy_name}} is done.",
+        "One last breath, and the {{enemy_name}} is still.",
+        "The {{enemy_name}} folds onto the stone. The room gets quieter.",
+        "That is the end of the {{enemy_name}}.",
+        "Dust settles on the {{enemy_name}}. Nothing under it moves.",
+        "The fight leaves the {{enemy_name}} all at once."
+      ],
+      "fallback": "The {{enemy_name}} goes down and stays down."
+    },
+    {
+      "key": "target.ambiguous",
+      "fact_slots": [
+        "target",
+        "candidates"
+      ],
+      "variants": [
+        "“{{target}}” could mean {{candidates}}. Pick one.",
+        "Which one? “{{target}}” fits {{candidates}}.",
+        "Too many matches for “{{target}}”: {{candidates}}.",
+        "Be specific. “{{target}}” names {{candidates}}.",
+        "Several things answer to “{{target}}”: {{candidates}}.",
+        "Narrow it down. “{{target}}” could be {{candidates}}."
+      ],
+      "fallback": "“{{target}}” could mean {{candidates}}. Pick one."
+    },
+    {
+      "key": "parse.unknown_verb",
+      "fact_slots": [
+        "verb"
+      ],
+      "variants": [
+        "“{{verb}}” isn’t something you can do here. Type ? for the list.",
+        "No move called “{{verb}}”. Try ? for help.",
+        "The delve doesn’t know “{{verb}}”. Type ? to see what works.",
+        "Unclear: “{{verb}}”. Type ? for commands.",
+        "“{{verb}}”? Try look, get, use, throw, or a direction.",
+        "That won’t parse: “{{verb}}”. The ? key lists what will."
+      ],
+      "fallback": "“{{verb}}” isn’t something you can do here. Type ? for the list."
+    },
+    {
+      "key": "throw.cup",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "The {{item_name}} bursts against the reaching knuckles in a spray of clay.",
+        "The {{item_name}} shatters across outstretched fingers. They snap back.",
+        "The {{item_name}} cracks off a forehead, and grabbing hands fly up to cover it.",
+        "Your {{item_name}} explodes into shards right between those reaching hands.",
+        "Pottery to the face. The {{item_name}} does exactly one job, perfectly.",
+        "The {{item_name}} hits, breaks, and every reaching finger flinches."
+      ],
+      "fallback": "The {{item_name}} bursts against the reaching knuckles in a spray of clay."
+    },
+    {
+      "key": "throw.leaf",
+      "fact_slots": [
+        "item_name"
+      ],
+      "variants": [
+        "The {{item_name}} flashes across his eyes, and his guard jerks up to follow it.",
+        "The {{item_name}} catches the light; his forearms twitch toward it and apart.",
+        "The {{item_name}} flutters past his face. For one blink, the guard splits.",
+        "You flick the {{item_name}} high. He tracks it, and his chin comes up.",
+        "A glint of {{item_name}}, and his locked arms break open to swat at it.",
+        "The {{item_name}} spins into his eyeline. Masonry, it turns out, can blink."
+      ],
+      "fallback": "The {{item_name}} flashes across his eyes, and his guard jerks up to follow it."
+    },
+    {
+      "key": "clock.threshold.patrol.2",
+      "fact_slots": [
+        "clock_label",
+        "at"
+      ],
+      "variants": [
+        "{{clock_label}} {{at}}. The voices stop talking and start listening.",
+        "{{clock_label}} at {{at}}: lantern light swings your way, and holds.",
+        "{{clock_label}} reaches {{at}}. Somebody out there says your direction out loud.",
+        "At {{at}}, {{clock_label}} changes pitch: the boots pick up speed.",
+        "{{clock_label}} {{at}}. The light in the passage stops searching and starts aiming.",
+        "{{clock_label}} climbs to {{at}}, and the dark starts answering your footsteps."
+      ],
+      "fallback": "{{clock_label}} {{at}}. The voices stop talking and start listening."
+    },
+    {
+      "key": "clock.threshold.patrol.4",
+      "fact_slots": [
+        "clock_label",
+        "at"
+      ],
+      "variants": [
+        "{{clock_label}} {{at}}. Lantern glare, a boot to the ribs, and they are gone.",
+        "{{clock_label}} hits {{at}}: light in your eyes, a fist in your gut, laughter moving off.",
+        "At {{at}}, {{clock_label}} arrives. A shove into the wall, and pain blooms down your side.",
+        "{{clock_label}} {{at}}. They find you in the dark, hit hard, and leave before you can answer.",
+        "{{clock_label}} reaches {{at}}. Light, voices, impact. You taste stone and blood.",
+        "{{clock_label}} at {{at}}: the boots arrive all at once. When the light passes, you are bleeding."
+      ],
+      "fallback": "{{clock_label}} {{at}}. Lantern glare, a boot to the ribs, and they are gone."
+    },
+    {
+      "key": "object.ring",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} is small, heavy, and polished by years of one careful thumb.",
+        "Someone wore the {{object_name}} a long time. Someone will want it back.",
+        "The {{object_name}} glints in the moss, too clean to be lost by accident.",
+        "Inside the {{object_name}}, a worn inscription: a name, rubbed almost smooth.",
+        "The {{object_name}} fits no finger of yours. It was made for someone precise.",
+        "Brass, dented, precious to somebody: the {{object_name}}."
+      ],
+      "fallback": "The {{object_name}} is small, heavy, and polished by years of one careful thumb."
+    },
+    {
+      "key": "object.dome",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} leans over the room, ribs cracked, dust sifting down in a slow hiss.",
+        "Up close, the {{object_name}} creaks. It isn’t done.",
+        "The {{object_name}} hangs in broken plates, held up mostly by stubbornness.",
+        "Grit ticks down from the {{object_name}} onto your shoulders.",
+        "The {{object_name}} groans softly, like a ship settling at anchor.",
+        "You look up at the {{object_name}}, and it seems to look back down, heavily."
+      ],
+      "fallback": "The {{object_name}} leans over the room, ribs cracked, dust sifting down in a slow hiss."
+    },
+    {
+      "key": "object.bell",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} hangs mute. Where the clapper should be, a clean cut.",
+        "You tap the {{object_name}}. Nothing. The clapper was taken off on purpose.",
+        "The {{object_name}} was a warning bell once. Someone made sure it can’t warn anymore.",
+        "Dust on the {{object_name}}, and a bright scar where the clapper used to hang.",
+        "The {{object_name}} sways without a sound. The silence is deliberate.",
+        "Hollow and dumb: the {{object_name}}, gutted of its clapper."
+      ],
+      "fallback": "The {{object_name}} hangs mute. Where the clapper should be, a clean cut."
+    },
+    {
+      "key": "object.chart",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} is inked in two hands: old stars, and newer, angrier lines.",
+        "Pinned flat under dust: the {{object_name}}, its constellations crossed by a crack.",
+        "The {{object_name}} maps the sky through the dome, back when there was a dome.",
+        "Someone drew the dome’s fracture right across the {{object_name}}, in red.",
+        "You smooth the {{object_name}}. Stars, a ruled line, a careful arrow.",
+        "The {{object_name}} crackles as you unroll it. Stars on top, damage underneath."
+      ],
+      "fallback": "The {{object_name}} is inked in two hands: old stars, and newer, angrier lines."
+    },
+    {
+      "key": "object.cup",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} is thick-walled and cheap. It would shatter beautifully.",
+        "The {{object_name}} is chipped, heavy for its size, and easy to throw.",
+        "The {{object_name}} sits in your palm like a stone. A throwable stone.",
+        "Rough glaze, thumb-worn rim. Hands flinch from a flying {{object_name}}.",
+        "The {{object_name}}: good for water, better for startling someone who grabs.",
+        "Nobody will miss the {{object_name}}. Somebody might duck it."
+      ],
+      "fallback": "The {{object_name}} is thick-walled and cheap. It would shatter beautifully."
+    },
+    {
+      "key": "object.leaf",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} is thin as breath and catches every scrap of light.",
+        "The {{object_name}} is beaten fine. Wave it, and eyes follow.",
+        "The {{object_name}} flickers even when you hold still. Distracting, on purpose.",
+        "The {{object_name}} weighs nothing and glitters like it wants attention.",
+        "Toss the {{object_name}} and it spins and flashes. Eyes can’t help following.",
+        "Bright, light, useless for anything but being looked at: the {{object_name}}."
+      ],
+      "fallback": "The {{object_name}} is thin as breath and catches every scrap of light."
+    },
+    {
+      "key": "object.bowl",
+      "fact_slots": [
+        "object_name"
+      ],
+      "variants": [
+        "The {{object_name}} holds one swallow of rainwater that smells faintly of honey.",
+        "Someone left the {{object_name}} full, for whoever needed it next.",
+        "The {{object_name}} is old stone; the water inside is still clear.",
+        "Old prayers circle the rim of the {{object_name}}. One mouthful left.",
+        "The {{object_name}} is small, cool, and not quite empty.",
+        "The {{object_name}}: a single swallow, kept for someone hurt."
+      ],
+      "fallback": "The {{object_name}} holds one swallow of rainwater that smells faintly of honey."
+    }
+  ]
+}

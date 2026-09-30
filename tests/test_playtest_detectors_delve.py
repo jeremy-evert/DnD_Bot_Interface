@@ -10,7 +10,8 @@ from unittest.mock import patch
 from playtest import fixtures_delve as fixtures
 from playtest.detectors import run_all, verify_instance_quotes
 from playtest.detectors_delve import (DETECTOR_VERSION_DELVE, input_tax_probe,
-    probe_delve_static, run_all_delve, session_facts_delve)
+    NOT_A_REFUSAL, REFUSAL_KEYS, _is_refusal, probe_delve_static, refusal_templates,
+    run_all_delve, session_facts_delve)
 from playtest.schema import SEVERITY_TAXONOMY, count_turns
 from playtest.transcript import load_transcript
 
@@ -89,19 +90,19 @@ class DelveDetectorTests(unittest.TestCase):
                  "MISSING_TELEGRAPH", "FAIL_WITH_NOTHING", "INPUT_TAX", "STALLED_RUN",
                  "UNSIGNALED_DEAD_END")
         expected = {
-            # Filled from the controller-authored pilot_v2 transcripts and run receipts.
-            "delve2_explorer": [2, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            "delve2_newcomer": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve2_rules_lawyer": [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve2_tactician": [3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve3_explorer": [2, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            "delve3_newcomer": [3, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-            "delve3_rules_lawyer": [6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve3_tactician": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve_explorer": [2, 2, 0, 2, 0, 0, 0, 0, 0, 1, 0],
-            "delve_newcomer": [5, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            "delve_rules_lawyer": [4, 4, 0, 2, 0, 0, 0, 0, 0, 1, 0],
-            "delve_tactician": [6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            # The historical banks recover refusals missed by the old current-bank matcher.
+            "delve2_explorer": [5, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            "delve2_newcomer": [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve2_rules_lawyer": [7, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve2_tactician": [8, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve3_explorer": [6, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            "delve3_newcomer": [4, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            "delve3_rules_lawyer": [10, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve3_tactician": [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve_explorer": [5, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            "delve_newcomer": [10, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "delve_rules_lawyer": [7, 5, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            "delve_tactician": [9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         }
         table = {}
         for name, session in self.sessions.items():
@@ -115,8 +116,10 @@ class DelveDetectorTests(unittest.TestCase):
 
     def test_unrecognized_unsupported_from_real_harness_refusal(self):
         result, rows = fixtures.real_delve_run(["give ring to Mira"])
+        from delve.pack import load_engine_ready_pack
+        pack = load_engine_ready_pack(ROOT / "delve" / "content" / "mossy_fast_slice.json")
         quote = next(line for line in result.output.splitlines()
-                     if "Empty hands." in line or "answers to" in line or "The delve doesn’t know" in line)
+                     if any(pattern.match(line.strip()) for pattern in refusal_templates(pack)))
         self.assertIn("UNRECOGNIZED_COMMAND", self.modes(rows))
         journal = [{"turn_id": 1, "unsupported_intent": "give ring to Mira"}]
         self.assertIn("UNSUPPORTED_INTENT", self.modes(rows, journal=journal))
@@ -124,6 +127,70 @@ class DelveDetectorTests(unittest.TestCase):
         # Journal claim without an output refusal is insufficient.
         row = copy_row(rows[-1]); row["new_output"] = "You find the ring."; row["snapshot"]["canonical_state_hash"] = "changed"
         self.assertNotIn("UNSUPPORTED_INTENT", self.modes([row], journal=journal))
+
+    def test_refusal_classification_covers_current_bank(self):
+        from delve.pack import load_engine_ready_pack
+        pack = load_engine_ready_pack(ROOT / "delve" / "content" / "mossy_fast_slice.json")
+        bank_keys = {entry.key for entry in pack.bank}
+        self.assertEqual(bank_keys, REFUSAL_KEYS | set(NOT_A_REFUSAL))
+        self.assertFalse(REFUSAL_KEYS & set(NOT_A_REFUSAL))
+        self.assertTrue(all(NOT_A_REFUSAL.values()))
+
+    def test_refusal_templates_follow_new_keys_and_wording_drift(self):
+        import copy
+        from delve.pack import load_engine_ready_pack
+        from playtest import detectors_delve
+        source = json.loads((ROOT / "delve" / "content" / "mossy_fast_slice.json").read_text(encoding="utf-8"))
+        templates = refusal_templates(source)
+        for key in sorted(REFUSAL_KEYS):
+            entry = next(row for row in source["bank"]["entries"] if row["key"] == key)
+            for index, variant in enumerate(entry["variants"]):
+                rendered = variant.replace("{{target}}", "sample target").replace("{{candidates}}", "sample A, sample B")
+                rendered = rendered.replace("{{enemy_name}}", "sample foe").replace("{{direction}}", "north")
+                rendered = rendered.replace("{{object_name}}", "sample object").replace("{{verb}}", "sample verb")
+                self.assertTrue(any(pattern.match(rendered) for pattern in templates), (key, index, rendered))
+
+        # A classification decision adds a new refusal key; template extraction
+        # then discovers its variants from pack data without detector edits.
+        mutated = copy.deepcopy(source)
+        mutated["bank"]["entries"].append({"key": "target.new_refusal", "variants": ["The {{target}} is beyond reach!"], "fallback": "The {{target}} is beyond reach!"})
+        with patch.object(detectors_delve, "REFUSAL_KEYS", REFUSAL_KEYS | {"target.new_refusal"}):
+            added = refusal_templates(mutated)
+        self.assertTrue(any(pattern.match("The sample target is beyond reach!") for pattern in added))
+
+        # Content mutation is also data only: altered static wording still matches.
+        changed = copy.deepcopy(source)
+        changed_entry = next(row for row in changed["bank"]["entries"] if row["key"] == "parse.unknown_verb")
+        changed_entry["variants"][0] = "Fresh rejection for {{verb}}!"
+        changed_templates = refusal_templates(changed)
+        self.assertTrue(_is_refusal("Fresh rejection for moonwalking!", changed_templates))
+
+    def test_unmatched_game_build_is_inconclusive(self):
+        row = fixtures.action_row(1, ["mystery"], "A response with no known refusal template.", {})
+        row["game_sha"] = "unknown-build-sha"
+        found = run_all_delve([row])
+        self.assertTrue(any(note.get("kind") == "INCONCLUSIVE"
+                            and note.get("mode") == "UNRECOGNIZED_COMMAND"
+                            and note.get("rationale") == "refusal templates unavailable for this build"
+                            for note in found.notes))
+
+    def test_m114_wording_refusals_from_fresh_real_replays(self):
+        from playtest.harness import replay
+        absent = replay(0, ["f", "x nobody"], game_id="delve")
+        self.assertIsNone(absent.error)
+        absent_row = fixtures.action_row(1, ["x nobody"], absent.output, {})
+        self.assertIn("isn’t here", absent.output)
+        self.assertIn("UNRECOGNIZED_COMMAND", self.modes([absent_row]))
+
+        not_held = replay(731, ["f", "use ring"], game_id="delve")
+        self.assertIsNone(not_held.error)
+        not_held_row = fixtures.action_row(1, ["use ring"], not_held.output, {})
+        self.assertIn("not in hand", not_held.output)
+        self.assertIn("UNRECOGNIZED_COMMAND", self.modes([not_held_row]))
+
+    def test_throw_fizzle_remains_a_consequence_not_a_refusal(self):
+        self.assertNotIn("throw.fizzle", REFUSAL_KEYS)
+        self.assertIn("Consequence", NOT_A_REFUSAL["throw.fizzle"])
 
     def test_repeated_response_twin_and_state_epoch_guard(self):
         source = self.sessions["delve_explorer"]["records"]
@@ -133,7 +200,11 @@ class DelveDetectorTests(unittest.TestCase):
         self.assertNotIn("REPEATED_RESPONSE", self.modes(rows))
 
     def test_stall_and_combat_resolution_rules_on_real_rows(self):
-        rows = self.sessions["delve_explorer"]["records"]
+        # This synthetic pair remains usable even when historical content adds
+        # newly recognized refusals to the real transcript corpus.
+        state = {"canonical_state_hash": "same"}
+        rows = [fixtures.action_row(0, [], "MOSSY ENTRY", state, frame_kind="setup"),
+                fixtures.action_row(1, ["wait"], "You wait.", state)]
         self.assertIn("NO_CONSEQUENCE_STALL", self.modes(rows))
         # A combat resolution is a consequence even when canonical state did not change.
         state = copy_row(rows[-1]["snapshot"]); state["canonical_state_hash"] = "same"

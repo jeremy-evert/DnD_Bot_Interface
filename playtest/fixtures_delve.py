@@ -22,6 +22,7 @@ SYNTHETIC_TWINS = (
     ("REPEATED_RESPONSE", "stable-state transcript twin cloned from a real help frame"),
     ("DOMINANT_ACTION", "attack-heavy transcript twin cloned from real combat frames"),
     ("LATENCY_BREAK", "injected 100 ms/action measurement threshold twin"),
+    ("STALL_AND_REPEAT", "real controller with accepted brace action patched to return identical no-op result"),
 )
 
 def load_rows(path):
@@ -114,6 +115,26 @@ def action_row(turn, command, output, state, *, frame_kind="action"):
     return {"turn_id": turn, "frame_id": turn, "frame_kind": frame_kind,
             "input_calls": list(command), "new_output": output, "snapshot": state,
             "termination": "playing"}
+
+def stall_twin(seed=731):
+    """REAL_HARNESS twin: accepted brace actions become a repeated no-op response."""
+    import delve.__main__ as main
+    from delve.engine import Engine, Event
+    real_apply = Engine.apply
+    def no_op(self, action):
+        if getattr(action, "verb", None) == "brace":
+            return [Event("help", "help", {}, {}, [])]
+        return real_apply(self, action)
+    with patch.object(Engine, "apply", new=no_op), \
+         patch.object(main, "render_help", return_value="The same response repeats."):
+        result = replay(seed, ["f", "b", "b", "b"], game_id="delve")
+    snap = snapshot(result.witness, "delve") if result.witness else {}
+    repeated_line = "The same response repeats."
+    assert result.output.count(repeated_line) == 3
+    rows = [{"turn_id": n, "frame_id": n, "frame_kind": "action", "input_calls": ["b"],
+             "new_output": repeated_line, "snapshot": dict(snap), "termination": "playing"}
+            for n in range(1, 4)]
+    return result, rows
 
 def patched_telegraph_twin(real_rows):
     """SYNTHETIC twin: real HP-loss frame, with the preceding status intent line removed."""

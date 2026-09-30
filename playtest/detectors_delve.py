@@ -181,10 +181,55 @@ def _is_refusal(text, patterns):
     return any(p.search(line.strip()) for p in patterns for line in text.splitlines())
 
 
+MATERIAL_SNAPSHOT_FIELDS = frozenset({
+    "player", "room_id", "inventory", "present_objects", "flags",
+    "known_clues", "known_facts", "clocks", "enemies", "terminal",
+})
+# Snapshot bookkeeping/configuration has no direct game consequence: event/turn
+# accounting, RNG accounting, narration memory, canonical digest, and run identity.
+BOOKKEEPING_SNAPSHOT_FIELDS = frozenset({
+    "turn", "event_log", "bank_memory", "rng_draws", "canonical_state_hash",
+    "seed", "pack_id",
+})
+
+
+def material_state(snapshot):
+    """Return the consequence-bearing snapshot projection used by stall detectors."""
+    unknown = set(snapshot) - MATERIAL_SNAPSHOT_FIELDS - BOOKKEEPING_SNAPSHOT_FIELDS
+    if unknown:
+        raise ValueError(f"unclassified Delve snapshot fields: new={sorted(unknown)}")
+    return {key: snapshot[key] for key in sorted(MATERIAL_SNAPSHOT_FIELDS) if key in snapshot}
+
+
+def _material_hash(row):
+    snapshot = row.get("snapshot", {})
+    if not snapshot:
+        return None
+    # The shared test probe also passes D&D snapshots through this Delve module.
+    if "pack_id" not in snapshot:
+        return snapshot.get("canonical_state_hash")
+    canonical = json.dumps(material_state(snapshot), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    import hashlib
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _parsed_action(calls):
+    """Return parser canonical action based on Delve's command alias table."""
+    if not calls:
+        return None
+    from delve.commands import ALIAS_ACTIONS
+    words = calls[0].strip().casefold().split()
+    if not words:
+        return None
+    first = words[0]
+    phrase = " ".join(words)
+    if phrase in ALIAS_ACTIONS:
+        first = phrase
+    return ALIAS_ACTIONS.get(first)
+
+
 def _query(calls):
-    return bool(calls) and calls[0].strip().casefold() in {
-        "look", "l", "x", "examine", "inspect", "read", "check", "study",
-        "inventory", "i", "?", "help", "status", "s"}
+    return _parsed_action(calls) in {"look", "inventory", "help", "quit"}
 
 
 def _is_action(row):
@@ -193,7 +238,7 @@ def _is_action(row):
 
 
 def _state_hash(row):
-    return row.get("snapshot", {}).get("canonical_state_hash")
+    return _material_hash(row)
 
 
 def _status_enemy_lines(text):
@@ -263,11 +308,20 @@ def run_all_delve(records, journal=None, content=None, receipt=None):
         calls = row.get("input_calls", [])
         if i and _is_action(row) and calls and not _query(calls) and not refusal_line:
             before, after = _state_hash(records[i - 1]), _state_hash(row)
-            if before and before == after and not informative.search(text) and not resolution.search(text):
+            response = _response(row)
+            # A stall requires a repeated no-effect response, not one resolved
+            # failure. This catches loops while preserving isolated attempts.
+            prior = records[i - 1]
+            prior_response = _response(prior)
+            prior_calls = prior.get("input_calls", [])
+            if (before and before == after and response and response == prior_response and
+                    _is_action(prior) and prior_calls and not _query(prior_calls) and
+                    not _is_refusal(prior.get("new_output", ""), refusals) and
+                    not informative.search(text) and not resolution.search(text)):
                 quote = next((line.strip() for line in text.splitlines()
                               if line.strip() and not line.strip().startswith(("MOSSY ", "HOLLOW ", "COLLAPSED ", "VAULT ", "Goblin ", "Hobgoblin Captain ", ">"))), "")
                 _add(out, "NO_CONSEQUENCE_STALL", row, quote,
-                     "Accepted non-query action changed neither canonical state nor actionable information.")
+                     "Accepted non-query action repeated the prior response without changing material state or revealing information.")
 
         # The previous transcript frame is the only permitted source for telegraph evidence.
         if i and _is_action(row):
@@ -288,7 +342,7 @@ def run_all_delve(records, journal=None, content=None, receipt=None):
             quote = next((line.strip() for line in text.splitlines() if line.strip()), "")
             _add(out, "INPUT_TAX", row, quote, "One action frame consumed multiple terminal input calls.")
 
-    # Repeated answers require known, unchanged canonical state and separate frames.
+    # Repeated answers require known, unchanged material state and separate frames.
     groups = defaultdict(list)
     epoch, previous = 0, object()
     for row in records:
@@ -306,7 +360,7 @@ def run_all_delve(records, journal=None, content=None, receipt=None):
                           if line.strip() and not line.strip().startswith(("MOSSY ", "HOLLOW ", "COLLAPSED ", "VAULT ", "Goblin ", "Hobgoblin Captain ", ">"))), "")
             if quote:
                 out.append(_instance("REPEATED_RESPONSE", [r["turn_id"] for r in rows], quote,
-                    "Same response repeats in three distinct frames without an intervening canonical state change."))
+                    "Same response repeats in three distinct frames without an intervening material state change."))
 
     decisions = _combat_decisions(records)
     attacks = sum(r["input_calls"][0].strip().casefold() in {"a", "attack", "hit", "strike", "fight", "swing", "slash", "heavy"} for r in decisions)

@@ -10,7 +10,8 @@ from unittest.mock import patch
 from playtest import fixtures_delve as fixtures
 from playtest.detectors import run_all, verify_instance_quotes
 from playtest.detectors_delve import (DETECTOR_VERSION_DELVE, input_tax_probe,
-    NOT_A_REFUSAL, REFUSAL_KEYS, _is_refusal, probe_delve_static, refusal_templates,
+    BOOKKEEPING_SNAPSHOT_FIELDS, MATERIAL_SNAPSHOT_FIELDS, NOT_A_REFUSAL, REFUSAL_KEYS,
+    _is_refusal, material_state, probe_delve_static, refusal_templates,
     run_all_delve, session_facts_delve)
 from playtest.schema import SEVERITY_TAXONOMY, count_turns
 from playtest.transcript import load_transcript
@@ -91,11 +92,11 @@ class DelveDetectorTests(unittest.TestCase):
                  "UNSIGNALED_DEAD_END")
         expected = {
             # The historical banks recover refusals missed by the old current-bank matcher.
-            "delve2_explorer": [5, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            "delve2_explorer": [5, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "delve2_newcomer": [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "delve2_rules_lawyer": [7, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "delve2_tactician": [8, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            "delve3_explorer": [6, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            "delve3_explorer": [6, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "delve3_newcomer": [4, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0],
             "delve3_rules_lawyer": [10, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             "delve3_tactician": [4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -104,15 +105,20 @@ class DelveDetectorTests(unittest.TestCase):
             "delve_rules_lawyer": [7, 5, 0, 0, 0, 0, 0, 0, 0, 1, 0],
             "delve_tactician": [9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         }
+        before_stalls = {name: int(name in {"delve2_explorer", "delve3_explorer"}) for name in expected}
         table = {}
         for name, session in self.sessions.items():
             results = run_all_delve(session["records"], session["journal"], receipt=session["receipt"])
             table[name] = [sum(bool(item["mode"] == mode and item["turn_ids"]) for item in results) if mode != "STALLED_RUN"
                            else sum(item["mode"] == mode for item in results) for mode in modes]
             self.assertEqual(table[name], expected[name], name)
-        print("\nReal Delve transcript detector counts (" + " | ".join(modes) + ")")
+        before = {name: list(values) for name, values in table.items()}
+        for name, count in before_stalls.items():
+            before[name][3] = count
+        print("\nReal Delve per-mode counts BEFORE -> AFTER (" + " | ".join(modes) + ")")
         for name in sorted(table):
-            print(name + " | " + " | ".join(str(value) for value in table[name]))
+            print(name + " | " + " | ".join(str(value) for value in before[name]) +
+                  " -> " + " | ".join(str(value) for value in table[name]))
 
     def test_unrecognized_unsupported_from_real_harness_refusal(self):
         result, rows = fixtures.real_delve_run(["give ring to Mira"])
@@ -196,15 +202,36 @@ class DelveDetectorTests(unittest.TestCase):
         source = self.sessions["delve_explorer"]["records"]
         rows = repeat_twin(source)
         self.assertIn("REPEATED_RESPONSE", self.modes(rows))
-        rows[2]["snapshot"]["canonical_state_hash"] = "changed"
+        rows[2]["snapshot"]["player"] = {"hp": 1}
         self.assertNotIn("REPEATED_RESPONSE", self.modes(rows))
+
+    def test_snapshot_fields_are_exhaustively_classified(self):
+        from delve.state import DelveState
+        from delve.pack import load_engine_ready_pack
+        snapshot = DelveState.new(load_engine_ready_pack(ROOT / "delve" / "content" / "mossy_fast_slice.json"), 3, "fighter").snapshot()
+        self.assertEqual(set(snapshot), MATERIAL_SNAPSHOT_FIELDS | BOOKKEEPING_SNAPSHOT_FIELDS)
+        self.assertEqual(set(material_state(snapshot)), MATERIAL_SNAPSHOT_FIELDS)
+        snapshot["new_future_counter"] = 1
+        with self.assertRaisesRegex(ValueError, "unclassified Delve snapshot fields"):
+            material_state(snapshot)
+
+    def test_real_controller_stall_and_repeat_twin(self):
+        result, twin = fixtures.stall_twin()
+        self.assertIsNone(result.error)
+        found = run_all_delve(twin)
+        self.assertIn("NO_CONSEQUENCE_STALL", [item["mode"] for item in found])
+        self.assertIn("REPEATED_RESPONSE", [item["mode"] for item in found])
+        for session in self.sessions.values():
+            modes = self.modes(session["records"], journal=session["journal"])
+            self.assertNotIn("NO_CONSEQUENCE_STALL", modes)
+            self.assertNotIn("REPEATED_RESPONSE", modes)
 
     def test_stall_and_combat_resolution_rules_on_real_rows(self):
         # This synthetic pair remains usable even when historical content adds
         # newly recognized refusals to the real transcript corpus.
         state = {"canonical_state_hash": "same"}
-        rows = [fixtures.action_row(0, [], "MOSSY ENTRY", state, frame_kind="setup"),
-                fixtures.action_row(1, ["wait"], "You wait.", state)]
+        rows = [fixtures.action_row(0, [], "MOSSY ENTRY", state, frame_kind="setup")]
+        rows.extend(fixtures.action_row(turn, ["wait"], "You wait.", state) for turn in (1, 2, 3))
         self.assertIn("NO_CONSEQUENCE_STALL", self.modes(rows))
         # A combat resolution is a consequence even when canonical state did not change.
         state = copy_row(rows[-1]["snapshot"]); state["canonical_state_hash"] = "same"
@@ -213,6 +240,23 @@ class DelveDetectorTests(unittest.TestCase):
         after = copy_row(prior); after["turn_id"] = after["frame_id"] = 81
         after["new_output"] = "A miss. The Goblin resets."
         self.assertNotIn("NO_CONSEQUENCE_STALL", self.modes([prior, after]))
+
+    def test_queries_and_refusals_are_excluded_from_stall(self):
+        state = {"canonical_state_hash": "same"}
+        for command, output in ((["x collapse"], "You inspect the collapse."),
+                                (["i"], "Inventory: empty."),
+                                (["?"], "Commands are listed."),
+                                (["q"], "Goodbye.")):
+            rows = [fixtures.action_row(0, [], "Setup", state, frame_kind="setup")]
+            rows.extend(fixtures.action_row(turn, command, output, state) for turn in (1, 2, 3))
+            self.assertNotIn("NO_CONSEQUENCE_STALL", self.modes(rows), command)
+        refusal = next(row for session in self.sessions.values() for row in session["records"]
+                       if row.get("input_calls") and any(item["mode"] == "UNRECOGNIZED_COMMAND"
+                           and item["turn_ids"] == [row["turn_id"]]
+                           for item in run_all_delve(session["records"], session["journal"])))
+        rows = [copy_row(refusal) for _ in range(3)]
+        for turn, row in enumerate(rows, 1): row["turn_id"] = row["frame_id"] = turn
+        self.assertNotIn("NO_CONSEQUENCE_STALL", self.modes(rows))
 
     def test_dominant_action_twin_and_soft_boundary(self):
         source = self.sessions["delve3_newcomer"]["records"]

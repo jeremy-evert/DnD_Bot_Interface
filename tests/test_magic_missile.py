@@ -50,20 +50,24 @@ class MagicMissileTests(unittest.TestCase):
                 self.assertEqual(game.combat_turn, "enemy")
                 self.assertEqual(roller.requested_sides, [4, 4])
 
-    def test_non_wizard_cannot_cast_with_forged_charge(self):
-        game = Adventure(make_character("fighter", "Arin"))
-        game.start_encounter(FixedRoller(20, 1))
-        game.hero.spell_charges = 1
-        hp = game.enemy.hp
-        roller = FixedRoller(4, 4)
+    def test_non_wizard_cannot_cast_with_forged_charge_proxy_states(self):
+        for spell_charges, max_spell_charges in ((1, 1), (2, 7)):
+            with self.subTest(spell_charges=spell_charges, max_spell_charges=max_spell_charges):
+                game = Adventure(make_character("fighter", "Arin"))
+                game.start_encounter(FixedRoller(20, 1))
+                game.hero.spell_charges = spell_charges
+                game.hero.max_spell_charges = max_spell_charges
+                hp = game.enemy.hp
+                roller = FixedRoller(4, 4)
 
-        with self.assertRaises(ValueError):
-            game.player_cast_magic_missile(roller)
+                with self.assertRaises(ValueError):
+                    game.player_cast_magic_missile(roller)
 
-        self.assertEqual(game.enemy.hp, hp)
-        self.assertEqual(game.hero.spell_charges, 1)
-        self.assertEqual(game.combat_turn, "hero")
-        self.assertEqual(roller.requested_sides, [])
+                self.assertEqual(game.enemy.hp, hp)
+                self.assertEqual(game.hero.spell_charges, spell_charges)
+                self.assertEqual(game.hero.max_spell_charges, max_spell_charges)
+                self.assertEqual(game.combat_turn, "hero")
+                self.assertEqual(roller.requested_sides, [])
 
     def test_out_of_charges_does_not_consume_turn(self):
         game = self.wizard_in_combat()
@@ -76,8 +80,18 @@ class MagicMissileTests(unittest.TestCase):
 
     def test_charges_refresh_at_next_encounter(self):
         game = Adventure(make_character("wizard", "Cy"))
-        game.hero.spell_charges = 0
+        game.enemy.hp = 1
         game.start_encounter(FixedRoller(20, 1))
+        game.player_cast_magic_missile(FixedRoller(4, 4))
+        self.assertEqual(game.hero.spell_charges, 2)
+
+        game.move("east")
+        game.move("east")
+        game.move("north")
+        game.move("east")
+        game.move("east")
+        game.start_encounter(FixedRoller(20, 1))
+
         self.assertEqual(game.hero.spell_charges, 3)
 
     def test_cast_command_aliases(self):
@@ -109,8 +123,41 @@ class MagicMissileTests(unittest.TestCase):
         narration_categories = [
             event["category"] for event in events if event["event"] == "narration"
         ]
-        self.assertEqual(narration_categories[-2:], ["enemy_defeated", "item_found"])
-        self.assertIn("goblin's brass ring", output.getvalue())
+        self.assertEqual(narration_categories, ["enemy_defeated", "item_found"])
+        rendered = output.getvalue()
+        self.assertEqual(rendered.count("Goblin falls."), 1)
+        self.assertEqual(
+            rendered.count("You notice goblin's brass ring among the fallen Goblin."),
+            1,
+        )
+
+    def test_final_boss_spell_kill_emits_defeat_without_loot(self):
+        game = Adventure(make_character("wizard", "Cy"))
+        game.current_room_id = "sanctum"
+        game.enemy.hp = 1
+        output = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SessionRecorder(Path(directory) / "boss-spell-kill.jsonl")
+            narrator = RecordingNarrator(NarratorForText(), recorder)
+            with patch("builtins.input", return_value="cast"), redirect_stdout(output):
+                run_combat(game, FixedRoller(20, 1, 4, 4), narrator, recorder)
+            events = [
+                json.loads(line)
+                for line in recorder.path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        narration_categories = [
+            event["category"] for event in events if event["event"] == "narration"
+        ]
+        self.assertEqual(narration_categories, ["enemy_defeated", "victory"])
+        self.assertEqual(
+            [category for category in narration_categories if category in {"enemy_defeated", "item_found"}],
+            ["enemy_defeated"],
+        )
+        self.assertEqual(output.getvalue().count("Hobgoblin Captain falls."), 1)
+        self.assertNotIn("You notice", output.getvalue())
+        self.assertEqual(game.room.items, [])
 
 
 class NarratorForText(Narrator):

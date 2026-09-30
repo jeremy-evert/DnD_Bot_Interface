@@ -40,6 +40,23 @@ def real_sessions():
             }
     return result
 
+def content_sha_for_game_sha(game_sha):
+    """Return the recorded Delve pack-file hash for a real fixture build."""
+    for manifest_path in ROOT.glob("*/manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("game_sha") == game_sha:
+            return next((item.get("sha256") for item in manifest.get("game_files", ())
+                         if item.get("path") == "delve/content/mossy_fast_slice.json"), None)
+    return None
+
+def legacy_bank_path(content_sha):
+    """Locate the extracted historical bank indexed by its original file hash."""
+    path = Path(__file__).resolve().parent / "fixtures" / "legacy_delve_banks" / f"{content_sha}.json"
+    return path if path.is_file() else None
+
 def input_tax_probe():
     """REAL_HARNESS twin: pilot1_explorer's move frames require command + direction."""
     return load_rows(PILOT1 / "transcript.jsonl")

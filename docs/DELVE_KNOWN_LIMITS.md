@@ -4,6 +4,8 @@ This document records what the M1 loader and runtime establish for an untrusted 
 
 ## Guarantees M1 checks
 
+Terminal input handling is total: it never crashes on any input, and malformed Unicode is treated as an unknown verb. M1 never received a Sandy PASS (three FAIL rounds); residual findings were fixed without a fourth pass. Ask for the review history in `evidence/dossiers/sol_m1_*.md`.
+
 | Property | M1 guarantee | Evidence |
 |---|---|---|
 | Pack shape and closed mechanics | Required fields, IDs, references, vocabularies, effect shapes, clue sources, bank fallbacks, and engine structural keys are validated before play. | `tests/test_delve_pack.py`, `tests/test_delve_content.py` — covered for named mutations and shipped content. |

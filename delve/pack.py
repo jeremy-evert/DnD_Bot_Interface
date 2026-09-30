@@ -26,6 +26,7 @@ STRUCTURAL_KEYS = {
     'clue.reveal': 'facts',
     'terminal.victory': 'always', 'terminal.death': 'always',
     'terminal.retry': 'always', 'terminal.closed': 'always',
+    'hazard.hint.unknown': 'hazards', 'hazard.hint.known': 'hazards',
 }
 
 # Event keys are a data interface: every slot listed here is supplied by the
@@ -49,6 +50,7 @@ ENGINE_SLOTS = {
     'clue.reveal': {'clue_id'}, 'terminal.victory': set(),
     'terminal.death': {'cause', 'cause_enemy', 'cause_intent'},
     'terminal.retry': set(), 'terminal.closed': set(),
+    'hazard.hint.unknown': set(), 'hazard.hint.known': set(),
 }
 
 
@@ -501,6 +503,10 @@ def validate_pack(pack):
                 if p['kind']=='room_is' and p['room_id'] not in reachable: possible=False
                 if p['kind']=='enemy_dead' and enemies[p['enemy_id']].room_id not in reachable: possible=False
             if not possible: _err('E_TERMINAL_UNREACHABLE',f'terminal {t.id}','victory predicate cannot be reached')
+    if (sum(t.kind == 'victory' for t in pack.terminals) < 1 or
+            sum(t.kind == 'death' for t in pack.terminals) != 1):
+        _err('E_TERMINAL_MISSING', '$.terminals',
+             'pack needs at least one victory terminal and exactly one death terminal')
     # Conditional producers count only when their room and prerequisites are reachable.
     settable=set(reachable_flags)
     settable.add('__player_hp_zero')

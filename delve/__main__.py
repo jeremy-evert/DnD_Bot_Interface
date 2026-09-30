@@ -10,6 +10,24 @@ from .render import RenderMemory, render_death, render_event, render_help, rende
 from .state import DelveState
 
 
+def _print(text=""):
+    """Keep terminal output alive if the active console cannot encode text."""
+    try:
+        print(text)
+    except UnicodeError:
+        print("[text unavailable]")
+
+
+def _input(prompt):
+    """Read a line, mapping undecodable bytes/scalars to a private sentinel."""
+    try:
+        line = input(prompt)
+        line.encode("utf-8")
+        return line
+    except UnicodeError:
+        return None
+
+
 def _parser():
     parser = argparse.ArgumentParser(description="Play the Fast Delve terminal adventure.")
     parser.add_argument("--seed", type=int, default=None, help="reproducible run seed (default: fresh seed)")
@@ -24,33 +42,35 @@ def main(argv=None):
     try:
         pack = load_engine_ready_pack(args.pack)
     except (OSError, ValueError) as exc:
-        print(f"Could not load delve pack: {exc}")
+        _print(f"Could not load delve pack: {exc}")
         return 2
     try:
         if args.hero_class is None:
-            selected = input("Class [f]ighter/[r]ogue/[w]izard (enter = fighter): ").strip().casefold()
+            selected = _input("Class [f]ighter/[r]ogue/[w]izard (enter = fighter): ")
+            selected = (selected or "").strip().casefold()
             hero_class = {"": "fighter", "f": "fighter", "fighter": "fighter",
                           "r": "rogue", "rogue": "rogue", "w": "wizard", "wizard": "wizard"}.get(selected, "fighter")
         else:
             hero_class = args.hero_class
     except (EOFError, KeyboardInterrupt):
-        print("The delve waits for another time.")
+        _print("The delve waits for another time.")
         return 0
 
     while True:
         state = DelveState.new(pack, seed, hero_class, name="Delver")
         engine = Engine(pack, state)
         memory = RenderMemory()
-        print(f"{pack.title} — seed {seed} — {hero_class}")
+        _print(f"{pack.title} — seed {seed} — {hero_class}")
         retry = False
         while state.terminal == "playing":
-            print(render_status(state, pack, memory))
+            _print(render_status(state, pack, memory))
             try:
-                line = input("> ")
+                line = _input("> ")
             except (EOFError, KeyboardInterrupt):
-                print("The delve pauses here. Goodbye.")
+                _print("The delve pauses here. Goodbye.")
                 return 0
-            parsed = parse_command(line, state, pack)
+            parsed = (parse_command(line, state, pack) if line is not None else
+                      ParseProblem("parse.unknown_verb", {"verb": "[undecodable input]"}))
             if isinstance(parsed, EnemyInspection):
                 enemy = next(e for e in pack.enemies if e.id == parsed.enemy_id)
                 runtime = state.enemies[enemy.id]
@@ -63,14 +83,14 @@ def main(argv=None):
                     prefix = enemy.name + ':'
                     if intent_text.casefold().startswith(prefix.casefold()):
                         intent_text = intent_text[len(prefix):].strip()
-                print(f"{enemy.name} {runtime['hp']}/{enemy.stats.hp} HP "
+                _print(f"{enemy.name} {runtime['hp']}/{enemy.stats.hp} HP "
                       f"[{runtime.get('zone', enemy.start_zone)}] — {intent_text or 'no declared intent'}")
                 continue
             if isinstance(parsed, ParseProblem):
                 if parsed.text:
-                    print(parsed.text)
+                    _print(parsed.text)
                 else:
-                    print(render_event({"key": parsed.message_key, "fact_slots": parsed.fact_slots}, pack, seed, memory))
+                    _print(render_event({"key": parsed.message_key, "fact_slots": parsed.fact_slots}, pack, seed, memory))
                 continue
             try:
                 events = engine.apply(parsed)
@@ -80,16 +100,16 @@ def main(argv=None):
                     if event.key == "help":
                         tip = render_event(event, pack, seed, memory)
                         tip += "\nObjects marked (get) can be picked up with get <name>."
-                        print(render_help(HELP_FORMS, tip))
+                        _print(render_help(HELP_FORMS, tip))
                         continue
-                    print(render_event(event, pack, seed, memory))
+                    _print(render_event(event, pack, seed, memory))
                 if state.terminal == "dead":
                     terminal = next((e for e in events if e.key == "terminal.death"), None)
-                    print(render_death(terminal, pack, seed, memory))
+                    _print(render_death(terminal, pack, seed, memory))
                     try:
-                        choice = input("Choice: ").strip().casefold()
+                        choice = (_input("Choice: ") or "").strip().casefold()
                     except (EOFError, KeyboardInterrupt):
-                        print("The delve waits for another time.")
+                        _print("The delve waits for another time.")
                         return 0
                     if choice in ("r", "retry"):
                         seed += 1
@@ -99,11 +119,11 @@ def main(argv=None):
                     break
                 if state.terminal == "victory":
                     terminal = next((e for e in events if e.key == "terminal.victory"), None)
-                    print(render_victory(terminal, pack, seed, memory))
+                    _print(render_victory(terminal, pack, seed, memory))
                     try:
-                        choice = input("Choice: ").strip().casefold()
+                        choice = (_input("Choice: ") or "").strip().casefold()
                     except (EOFError, KeyboardInterrupt):
-                        print("The delve waits for another time.")
+                        _print("The delve waits for another time.")
                         return 0
                     if choice in ("r", "retry"):
                         seed += 1
@@ -113,7 +133,7 @@ def main(argv=None):
                     break
             except Exception:
                 # A malformed or surprising input must not terminate ordinary play.
-                print("That command could not be resolved. Type ? for help.")
+                _print("That command could not be resolved. Type ? for help.")
         if not retry:
             return 0
 

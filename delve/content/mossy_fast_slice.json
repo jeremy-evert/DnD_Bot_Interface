@@ -920,6 +920,28 @@
         "fallback": "Another piece. It fits."
       },
       {
+        "key": "hazard.hint.unknown",
+        "fact_slots": [],
+        "variants": [
+          "The stone above looks loose, but nothing tells you where he stands.",
+          "A bad crack runs through the ceiling; you do not yet know where he is beneath it.",
+          "Dust sifts from the arch. The route under it is still a guess.",
+          "The vault roof may give way, but you have not placed the Captain below it."
+        ],
+        "fallback": "The stone above looks loose, but nothing tells you where he stands."
+      },
+      {
+        "key": "hazard.hint.known",
+        "fact_slots": [],
+        "variants": [
+          "You know his route now: a shove can put him under the loose stone.",
+          "The clues line up. A shove can put the Captain beneath the cracked arch.",
+          "You have marked where he stands; shove him under the failing ceiling.",
+          "The route is clear now. A well-placed shove can bring the stone down on him."
+        ],
+        "fallback": "You know his route now: a shove can put him under the loose stone."
+      },
+      {
         "key": "fact.payoff",
         "fact_slots": [
           "fact_label"

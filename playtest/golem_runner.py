@@ -69,8 +69,8 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
             yield value
         elif isinstance(value, dict):
             for key, item in value.items():
-                yield from strings(key)
                 if key != "command":
+                    yield from strings(key)
                     yield from strings(item)
         elif isinstance(value, (list, tuple)):
             for item in value:
@@ -91,26 +91,108 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
         collect(event)
         return commands
 
+    def shell_script(command):
+        """Return the script argument for a known shell -c wrapper, if present."""
+        try:
+            argv = shlex.split(command, posix=True)
+        except ValueError:
+            return None, False
+        if not argv:
+            return None, False
+        index = 0
+        # Shell-style leading assignments are accepted before the executable.
+        while index < len(argv) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", argv[index]):
+            index += 1
+        if index >= len(argv):
+            return None, False
+        executable = argv[index].rsplit("/", 1)[-1]
+        if executable == "env":
+            index += 1
+            while index < len(argv) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", argv[index]):
+                index += 1
+            if index >= len(argv):
+                return None, False
+            executable = argv[index].rsplit("/", 1)[-1]
+        if executable not in {"bash", "sh", "zsh"}:
+            return None, False
+        index += 1
+        # Codex uses -lc; also accept -c and split -l -c spellings.
+        if index >= len(argv):
+            return None, True
+        option = argv[index]
+        if option == "-l":
+            index += 1
+            if index >= len(argv) or argv[index] != "-c":
+                return None, True
+            index += 1
+        elif option.startswith("-") and "c" in option[1:] and set(option[1:]) <= {"l", "c"}:
+            index += 1
+        else:
+            return None, True
+        if index >= len(argv) or index + 1 != len(argv):
+            return None, True
+        return argv[index], True
+
+    def unwrapped(command):
+        """Peel up to three known shell wrappers; malformed wrappers are opaque."""
+        depth = 0
+        while depth < 3:
+            script, is_wrapper = shell_script(command)
+            if not is_wrapper:
+                return command, False
+            if script is None:
+                return command, True
+            command = script
+            depth += 1
+        _, is_wrapper = shell_script(command)
+        return (command, is_wrapper)
+
     def split_command(command):
         # These forms can execute or read content outside the visible simple-command
         # tokens. Do not grant any exemption when they appear, even inside quotes.
         if any(marker in command for marker in ("$(", "`", "<<<", "<<")):
             return None
-        try:
-            lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n<>")
+        def lex(source):
+            lexer = shlex.shlex(source, posix=True, punctuation_chars=";&|\n<>")
             lexer.whitespace = " \t\r"
             lexer.whitespace_split = True
             lexer.commenters = ""
-            tokens = list(lexer)
+            return list(lexer)
+        try:
+            tokens = lex(command)
         except ValueError:
-            return None
+            # Some Codex records contain a JSON string with an apostrophe in a
+            # shell single-quoted argument, which makes the displayed script
+            # syntactically unbalanced. Recover only an exact launcher data
+            # argument, using JSON's own string parser to find its boundary.
+            launcher = re.escape(str(Path(capsule) / "playctl")) if capsule else r"\./playctl"
+            match = re.match(rf"^(\s*(?:\./playctl|{launcher})\s+(?:step|journal)\s+)(['\"])(.*)$", command, re.S)
+            if not match:
+                return None
+            content = match.group(3)
+            start = next((i for i, char in enumerate(content) if char in "[{"), None)
+            if start is None:
+                return None
+            try:
+                _, end = json.JSONDecoder().raw_decode(content[start:])
+            except json.JSONDecodeError:
+                return None
+            payload_end = start + end
+            tail = content[payload_end:]
+            if tail.startswith(match.group(2)):
+                tail = tail[1:]
+            normalized = match.group(1) + shlex.quote(content[start:payload_end]) + tail
+            try:
+                tokens = lex(normalized)
+            except ValueError:
+                return None
         segments, current = [], []
         for token in tokens:
             if token in {";", "&&", "||", "|", "&", "\n"}:
                 if current:
                     segments.append(current)
                     current = []
-            elif any(char in token for char in "<>;|"):
+            elif token and all(char in "<>;|" for char in token):
                 # Unusual/redirection operator spellings are not parsed as an
                 # auditable simple command, so conservatively disable exemptions.
                 return None
@@ -138,6 +220,9 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
         return False
 
     def command_fragments(command):
+        command, opaque = unwrapped(command)
+        if opaque:
+            return [(command, False)]
         segments = split_command(command)
         if segments is None:
             return [(command, False)]
@@ -145,6 +230,9 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
 
     def path_audit(command, event_raw):
         """Resolve simple path operands against the capsule and shell-local cd state."""
+        command, opaque = unwrapped(command)
+        if opaque:
+            return [{"fragment": "command syntax", "reason": "UNRESOLVED_PATH", "event": event_raw}]
         segments = split_command(command)
         if not capsule:
             return []
@@ -223,6 +311,7 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
                     hits.append({"fragment": str(resolved), "reason": "FORBIDDEN_PATH", "event": event_raw})
         return hits
 
+    seen_item_commands = set()
     for event in events:
         raw = event if isinstance(event, str) else json.dumps(event, sort_keys=True)
         candidates = list(strings(event))
@@ -231,6 +320,13 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
             candidates = [raw]
         audited = [(candidate, False) for candidate in candidates]
         for command in commands:
+            item = event.get("item", {}) if isinstance(event, dict) else {}
+            if (isinstance(item, dict) and event.get("type") in {"item.started", "item.completed"}
+                    and isinstance(item.get("id"), str)):
+                key = (item["id"], command)
+                if key in seen_item_commands:
+                    continue
+                seen_item_commands.add(key)
             audited.extend(command_fragments(command))
             hits.extend(path_audit(command, raw))
         for fragment in (*forbidden, *((session,) if session else ()), *((replies,) if replies else ())):
@@ -538,9 +634,16 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     event_path = Path(event_log) if event_log is not None else run_dir / "stdout.log"
     event_bytes = event_path.read_bytes() if event_path.exists() else b""
     (run_dir / "audit.log").write_bytes(event_bytes)
-    for line in event_bytes.decode("utf-8", "replace").splitlines():
+    event_lines = event_bytes.decode("utf-8", "replace").splitlines(keepends=True)
+    for index, line in enumerate(event_lines):
         try: events.append(strict_json_loads(line))
-        except (ValueError, json.JSONDecodeError): events.append(line)
+        except (ValueError, json.JSONDecodeError):
+            # Captured JSONL streams may be cut off during the final record.
+            # It is not an event until its record parses; malformed complete
+            # records stay visible to the content audit as before.
+            if index == len(event_lines) - 1 and not line.endswith(("\n", "\r")):
+                continue
+            events.append(line)
     recognized_types = {"item.completed", "item.started", "turn.completed", "response.completed",
                         "session.created", "thread.started", "command", "tool_call"}
     recognized = bool(events) and any(isinstance(event, dict) and event.get("type") in recognized_types for event in events)

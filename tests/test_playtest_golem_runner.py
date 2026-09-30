@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import shlex
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch
@@ -120,6 +121,87 @@ class GolemRunnerTests(unittest.TestCase):
         _, _, receipt = self.run_fake("pass\n", event_log=events)
         self.assertEqual(receipt["audit_status"], "UNVERIFIABLE")
         self.assertEqual(receipt["run_outcome"], "AUDIT_UNVERIFIABLE")
+
+    def test_real_codex_event_fixtures_audit_clean_and_keep_event_counts(self):
+        fixture_dir = Path(__file__).resolve().parents[1] / "playtest/fixtures/real_codex_events"
+        fixtures = sorted(fixture_dir.glob("*.jsonl"))
+        self.assertEqual(len(fixtures), 3)
+        valid_play = '''
+            import json, shlex, subprocess
+            subprocess.run("./playctl step " + shlex.quote(json.dumps(["look"])), shell=True)
+            note = {"turn_id":1,"wanted":"look","surprise":"","continue":1,"reason":"fixture audit","unsupported_intent":None}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            '''
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture.name):
+                events = []
+                for line in fixture.read_text(encoding="utf-8").splitlines(keepends=True):
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass  # The real 60 KB capture can end mid-record.
+                _, _, receipt = self.run_fake(valid_play, cap=1, event_log=fixture)
+                self.assertEqual(receipt["audit_status"], "CLEAN")
+                self.assertEqual(receipt["run_outcome"], "COMPLETE")
+                self.assertEqual(receipt["audit_events_seen"], len(events))
+                self.assertEqual(audit_commands(events), [])
+
+    def test_real_codex_wrapped_forbidden_reads_remain_visible(self):
+        fixture = Path(__file__).resolve().parents[1] / "playtest/fixtures/real_codex_events/v2_base60_tactician.jsonl"
+        original = fixture.read_text(encoding="utf-8")
+        for target in ("reply", "session"):
+            with self.subTest(target=target):
+                next_run = type(self).runs + 1
+                path = (self.base / f"run-{next_run}/replies/0000.json" if target == "reply"
+                        else self.base / f"session-{next_run}/transcript.jsonl")
+                inner = f"cat {shlex.quote(str(path))}"
+                # Match the real Codex argv spelling, including double-quoted script.
+                wrapped = "/bin/bash -lc " + json.dumps(inner)
+                injected = {"type": "item.completed", "item": {
+                    "id": "injected-" + target, "type": "command_execution",
+                    "command": wrapped, "aggregated_output": "", "exit_code": 0, "status": "completed"}}
+                source = self.base / f"{target}-events.jsonl"
+                source.write_text(original + json.dumps(injected) + "\n", encoding="utf-8")
+                _, _, receipt = self.run_fake("pass\n", event_log=source)
+                self.assertEqual(receipt["audit_status"], "VIOLATED")
+                self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
+
+    def test_shell_wrappers_preserve_exact_launcher_exemption_and_data_payloads(self):
+        capsule = self.base / "capsule"
+        capsule.mkdir()
+        (capsule / "playctl").touch()
+        session = self.base / "session"
+        session.mkdir()
+        payload = json.dumps(["look", "apostrophe's ../ /mnt/nora/DnD_Bot_Interface/transcript.jsonl ☃"])
+        note = json.dumps({"turn_id":1,"wanted":"../ replies/x","surprise":"Iñtërnâtiônàlizætion: /mnt/nora/x",
+                           "continue":1,"reason":"apostrophe's path: /tmp/a/../b","unsupported_intent":None})
+        script = "./playctl step " + shlex.quote(payload) + " && ./playctl journal " + shlex.quote(note)
+        commands = [
+            "/bin/bash -lc " + shlex.quote(script),
+            "bash -c " + json.dumps(script, ensure_ascii=False),
+            "/bin/sh -c " + shlex.quote(script),
+            "sh -c " + json.dumps(script, ensure_ascii=False),
+            "zsh -lc " + shlex.quote(script),
+            "AREA='quoted value' /bin/bash -lc " + json.dumps(script, ensure_ascii=False),
+            "MODE=test bash -c " + shlex.quote("sh -c " + shlex.quote(script)),
+        ]
+        for command in commands:
+            with self.subTest(command=command[:45]):
+                self.assertEqual(audit_commands([{"command": command}], capsule, session), [])
+
+    def test_wrapped_forbidden_path_and_started_completed_pair_count_once(self):
+        capsule = self.base / "capsule"
+        capsule.mkdir()
+        (capsule / "playctl").touch()
+        session = self.base / "session"
+        session.mkdir()
+        command = "/bin/bash -lc " + shlex.quote("./playctl step '[\"look\"]' && cat " + shlex.quote(str(session / "transcript.jsonl")))
+        pair = [{"type": event_type, "item": {"id": "same-command", "type": "command_execution", "command": command}}
+                for event_type in ("item.started", "item.completed")]
+        hits = audit_commands(pair, capsule, session)
+        single = audit_commands(pair[:1], capsule, session)
+        self.assertEqual(hits, single)
+        self.assertIn("FORBIDDEN_PATH", [hit.get("reason") for hit in hits])
 
     def test_compound_playctl_then_reply_read_is_audited(self):
         reply = self.base / f"run-{type(self).runs + 1}" / "replies" / "0001.json"

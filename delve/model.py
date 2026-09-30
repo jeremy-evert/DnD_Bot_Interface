@@ -87,3 +87,35 @@ class BankEntry:
 @dataclass(frozen=True)
 class Pack:
     schema_version: int; id: str; title: str; start_room_id: str; atmosphere_registry: tuple[str,...]; rooms: tuple[Room,...]; enemies: tuple[Enemy,...]; hazards: tuple[Hazard,...]; clocks: tuple[Clock,...]; items: tuple[Item,...]; facts: tuple[Fact,...]; clues: tuple[Clue,...]; terminals: tuple[Terminal,...]; bank: tuple[BankEntry,...]; meta: dict|None=None
+
+# M2 is intentionally isolated from the M1 runtime model.  The validated
+# canonical JSON is immutable; consumers obtain defensive decoded copies.
+@dataclass(frozen=True)
+class V2Pack:
+    schema_version: int
+    id: str
+    canonical_json: str
+
+    def as_dict(self):
+        import json
+        return json.loads(self.canonical_json)
+
+MATERIAL_TAGS = (
+    "flammable", "wet", "oiled", "burning", "smoke", "fragile", "heavy",
+    "loud", "bright", "edible", "scented", "cover", "hidden", "rigged",
+)
+REACTION_RULES = (
+    "oil_flash", "ignition", "damp_heat", "fire_spread", "extinguish",
+    "break", "drop", "sound", "appetite", "feeding", "fear", "sight",
+)
+V2_SELECTORS = (
+    "actors_in_zone", "named_actor", "visible_actor", "object_named", "zone",
+    "connected_zone", "living_prey", "highest_priority_target", "safe_destination",
+    "adjacent_zone", "source_zone", "landing_zone", "player",
+)
+V2_RESOURCES = ("momentum", "trick", "missile", "ward", "spark")
+V2_ABILITY_IDS = (
+    "fighter.hold_door", "fighter.cleave", "fighter.guardbreak",
+    "rogue.lure", "rogue.slip", "rogue.rig",
+    "wizard.magic_missile", "wizard.ward", "wizard.fireball",
+)

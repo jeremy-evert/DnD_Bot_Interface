@@ -94,11 +94,13 @@ ACTIONABLE_INFORMATION_TERMS = (
 DETECTORS_NOT_IMPLEMENTED_FOR_GAME = "DETECTORS_NOT_IMPLEMENTED_FOR_GAME"
 
 
-def run_all(records, journal=None, content=None, game_id="dnd_combat"):
+def run_all(records, journal=None, content=None, game_id="dnd_combat", receipt=None):
     if game_id == "delve":
+        from .detectors_delve import run_all_delve
+        return run_all_delve(records, journal=journal, content=content, receipt=receipt)
+    if game_id != "dnd_combat":
         return {"status": "NOT_IMPLEMENTED", "marker": DETECTORS_NOT_IMPLEMENTED_FOR_GAME,
                 "instances": []}
-    if game_id != "dnd_combat": raise ValueError("unsupported game_id")
     out = DetectorResults()
     journal_rows = journal or []
     if isinstance(journal_rows, dict):

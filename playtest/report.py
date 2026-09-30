@@ -204,6 +204,17 @@ def compare(baseline_entries, candidate_entries, coverage_fraction=1.0):
             "sample_size_note": "Single-cycle model-player rates are problem discovery, not measurement; trend claims need repeated paired seeds."}
 
 
+CROSS_GAME_MODE_MAP = {
+    "UNRECOGNIZED_COMMAND": "UNRECOGNIZED_COMMAND",
+    "UNSUPPORTED_INTENT": "UNSUPPORTED_INTENT",
+    "REPEATED_RESPONSE": "REPEATED_RESPONSE",
+    "NO_CONSEQUENCE_STALL": "NO_CONSEQUENCE_STALL",
+    "DOMINANT_ACTION": "DOMINANT_ACTION",
+    "DOMINANT_ACTION_SOFT": "DOMINANT_ACTION_SOFT",
+    "FAIL_WITH_NOTHING": "FAIL_WITH_NOTHING",
+}
+
+
 def compare_cross_game(baseline_entries, candidate_entries, spec):
     """Descriptive cross-game pairing under an explicit, audited change declaration."""
     required = {"baseline_game_sha", "candidate_game_sha", "baseline_game_id",
@@ -245,10 +256,12 @@ def compare_cross_game(baseline_entries, candidate_entries, spec):
         for pair in pairs for side in ("baseline", "candidate"))
     mode_deltas = None
     if rates_implemented and pairs:
-        labels = sorted({(item["source"], item["mode"]) for pair in pairs for side in ("baseline", "candidate")
-                         for item in pair[side].get("verified_instances", []) if item.get("evidence_kind") == "transcript"}
-                        | {("detector", note["mode"]) for pair in pairs for side in ("baseline", "candidate")
-                           for note in pair[side].get("detector_notes", []) if note.get("kind") == "INCONCLUSIVE"})
+        shared = set(CROSS_GAME_MODE_MAP)
+        for side in ("baseline", "candidate"):
+            expected = "1" if spec[side + "_game_id"] == "dnd_combat" else "delve-1"
+            if any(pair[side].get("detector_version") != expected for pair in pairs):
+                shared.clear()
+        labels = [("detector", mode) for mode in sorted(shared)]
         mode_deltas = {}
         for source, mode in labels:
             unresolved = sum(1 for pair in pairs for side in ("baseline", "candidate")
@@ -268,7 +281,8 @@ def compare_cross_game(baseline_entries, candidate_entries, spec):
                 counts.append(count); turns.append(denominator)
             mode_deltas[f"{source}:{mode}"] = {"baseline_rate_per_100": rate_per_100(counts[0], turns[0]),
                 "candidate_rate_per_100": rate_per_100(counts[1], turns[1]),
-                "descriptive_delta_per_100": rate_per_100(counts[1], turns[1]) - rate_per_100(counts[0], turns[0])}
+                "descriptive_delta_per_100": rate_per_100(counts[1], turns[1]) - rate_per_100(counts[0], turns[0]),
+                "rate_status": "descriptive only"}
     return {"comparison_type": "CROSS_GAME", "paired_count": len(pairs), "pairs": pairs,
             "unpaired_baseline": len(left.keys() - right.keys()), "unpaired_candidate": len(right.keys() - left.keys()),
             "mode_rate_deltas": mode_deltas,

@@ -312,14 +312,13 @@ class PlaytestSeamTests(unittest.TestCase):
         self.assertEqual(judge["judge_outcome"], "COMPLETE")
         self.assertEqual(entry["game_id"], "delve")
         self.assertEqual(entry["game_sha"], manifest["game_sha"])
-        self.assertEqual(entry["detector_set_status"], "NOT_IMPLEMENTED")
-        self.assertFalse(entry["eligibility"]["comparison_eligible"])
-        self.assertEqual(entry["eligibility"]["reason_code"], "DETECTORS_NOT_IMPLEMENTED_FOR_GAME")
+        self.assertEqual(entry["detector_set_status"], "IMPLEMENTED")
+        self.assertEqual(entry["detector_version"], "delve-1")
+        self.assertTrue(entry["eligibility"]["comparison_eligible"])
         from playtest.detectors import run_all, DETECTORS_NOT_IMPLEMENTED_FOR_GAME
-        marker = run_all(records, game_id="delve")
-        self.assertEqual(marker["marker"], DETECTORS_NOT_IMPLEMENTED_FOR_GAME)
-        self.assertEqual(marker["status"], "NOT_IMPLEMENTED")
-        self.assertIsInstance(marker, dict)  # An empty [] would be indistinguishable from zero failures.
+        implemented = run_all(records, game_id="delve")
+        self.assertIsInstance(implemented, list)
+        self.assertTrue(all(item["detector_version"] == "delve-1" for item in implemented))
 
         base_session, base_run, _ = self._dispatch("baseline")
         self._judge(base_session, base_run, "baseline", [])
@@ -332,7 +331,13 @@ class PlaytestSeamTests(unittest.TestCase):
                       "permitted_changes": ["M1 map, command grammar, and engine"]}
         cross = compare_cross_game([dnd_entry], [entry], cross_spec)
         self.assertEqual(cross["paired_count"], 1)
-        self.assertEqual(cross["mode_rate_deltas"], None)
+        self.assertEqual(set(cross["mode_rate_deltas"]), {
+            "detector:UNRECOGNIZED_COMMAND", "detector:UNSUPPORTED_INTENT",
+            "detector:REPEATED_RESPONSE", "detector:NO_CONSEQUENCE_STALL",
+            "detector:DOMINANT_ACTION", "detector:DOMINANT_ACTION_SOFT",
+            "detector:FAIL_WITH_NOTHING"})
+        self.assertTrue(all(row["rate_status"] == "descriptive only"
+                            for row in cross["mode_rate_deltas"].values()))
         self.assertEqual(cross["label"], "CROSS_GAME: not like-for-like; descriptive only; no improvement claim")
         with self.assertRaisesRegex(ValueError, "spec"):
             compare_cross_game([dnd_entry], [entry], {"baseline_game_id": "dnd_combat"})

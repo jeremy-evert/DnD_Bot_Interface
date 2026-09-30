@@ -17,6 +17,21 @@ SPEC = ROOT / 'docs' / 'DELVE_M2_SPEC.md'
 
 def v2_example():
     selectors = list(model.V2_SELECTORS)
+    def intent(ident,kind,target,event_key,damage=0,destination=None,roll=False):
+        consequences=model.V2_INTENT_CONSEQUENCES
+        slots={
+            'strike':['actor_name','target_name','damage'],
+            'ranged':['actor_name','target_name','damage'],
+            'feed':['actor_name','target_name','damage'],
+            'move':['actor_name','destination_name'],
+            'flee':['actor_name','destination_name'],
+            'guard':['actor_name'], 'hold_position':['actor_name'],
+        }[kind]
+        result={'id':ident,'kind':kind,'selector':'visible_actor','target':target,
+                'damage':damage,'roll':roll,'consequence':consequences[kind],
+                'event_key':event_key,'cancel_event_key':'actor.intent.cancelled','fact_slots':slots}
+        if destination is not None: result['destination']=destination
+        return result
     d = {
         'schema_version': 2, 'id': 'menagerie_example', 'title': 'The Sundered Menagerie',
         'start_room_id': 'gate',
@@ -27,15 +42,26 @@ def v2_example():
         'actors': [
             {'id': 'drake', 'room_id': 'gate', 'zone': 'far', 'stats': {'hp': 18, 'armor_class': 14},
              'faction': 'predator', 'initiative': 8, 'state': 'hungry', 'inactive_state': 'sleeping', 'ecology_profile':'kiln_drake',
-             'intents': [{'id': 'bite', 'kind': 'strike', 'selector': 'named_actor', 'event_key': 'intent.drake.bite', 'fact_slots': ['actor_name']}],
+             'intents': [
+                 intent('feed', 'feed', 'living_prey', 'intent.drake.feed', 8),
+                 intent('flee', 'flee', 'safe_destination', 'intent.drake.flee', destination='balcony'),
+                 intent('move', 'move', 'connected_zone', 'intent.drake.move', destination='near'),
+                 intent('hold', 'hold_position', 'zone', 'intent.drake.hold', destination='far'),
+             ],
              'appetite': ['hungry', 'scented_prey'], 'fears': ['bright', 'crush'], 'aggro': ['retaliate_last_attacker'], 'tags': []},
             {'id': 'goblin_hook', 'room_id': 'gate', 'zone': 'doorway', 'stats': {'hp': 8, 'armor_class': 12},
              'faction': 'goblin', 'initiative': 4, 'state': 'guarding', 'ecology_profile':'banquet_goblin',
-             'intents': [{'id': 'hook_strike', 'kind': 'strike', 'selector': 'visible_actor', 'event_key': 'intent.goblin.hook', 'fact_slots': ['actor_name']}],
+             'intents': [
+                 intent('hook_strike', 'strike', 'visible_actor', 'intent.goblin.hook', 2),
+                 intent('hook_guard', 'guard', 'zone', 'intent.goblin.guard'),
+             ],
              'appetite': [], 'fears': ['bright'], 'aggro': ['guard_exit', 'strike_intruder']},
             {'id': 'goblin_slinger', 'room_id': 'gate', 'zone': 'far', 'stats': {'hp': 7, 'armor_class': 12},
              'faction': 'goblin', 'initiative': 3, 'state': 'guarding', 'ecology_profile':'banquet_goblin',
-             'intents': [{'id': 'sling', 'kind': 'ranged', 'selector': 'visible_actor', 'event_key': 'intent.goblin.slinger', 'fact_slots': ['actor_name']}],
+             'intents': [
+                 intent('sling', 'ranged', 'visible_actor', 'intent.goblin.slinger', 2),
+                 intent('sling_player', 'ranged', 'visible_actor', 'intent.goblin.slinger_player', 2),
+             ],
              'appetite': [], 'fears': ['bright'], 'aggro': ['guard_food', 'return_to_post']},
         ],
         'objects': [
@@ -97,15 +123,26 @@ class DelvePackV2Tests(unittest.TestCase):
         self.assertEqual(committed,pack)
         manifest=event_manifest(pack)
         self.assertEqual(manifest['events'], sorted(manifest['events'], key=lambda row: row['key']))
-        expected_keys={'ability.fighter.hold_door','ability.rogue.lure','ability.wizard.fireball','chain.scent.hunt.feed',
+        expected_keys={'ability.fighter.hold_door','ability.rogue.lure','ability.wizard.fireball','actor.intent.cancelled','chain.scent.hunt.feed',
             'chronicle.line','chronicle.signature','ecology.drake','ecology.goblin','enemy.defeated','intent.cancelled',
-            'intent.drake.bite','intent.goblin.hook','intent.goblin.slinger','material.r1.oil_flash','material.r2.ignition',
+            'intent.drake.feed','intent.drake.flee','intent.drake.move','intent.drake.hold',
+            'intent.goblin.hook','intent.goblin.guard','intent.goblin.slinger','intent.goblin.slinger_player','material.r1.oil_flash','material.r2.ignition',
             'material.r3.damp_heat','material.r4.fire_spread','material.r5.extinguish','material.r6.break','material.r7.drop',
             'material.r8.sound','material.r9.appetite','material.r10.feeding','material.r11.fear','material.r12.sight',
             'material.reaction','move.blocked','move.no_exit','room.description','room.enter','room.return','target.unknown',
             'terminal.closed','terminal.death','terminal.quit','terminal.victory'}
         self.assertEqual({row['key'] for row in manifest['events']},expected_keys)
-        self.assertEqual(manifest['manifest_hash'],'8d6aad468c9d65ef737a5f8464569ce33bb8e858d01b971e28b1313f85444797')
+        self.assertEqual(next(row for row in manifest['events'] if row['key']=='actor.intent.cancelled')['fact_slots'],
+                         ['actor_name','target_name'])
+        slots_by_key={row['key']:row['fact_slots'] for row in manifest['events']}
+        self.assertEqual(slots_by_key['intent.drake.feed'],['actor_name','damage','target_name'])
+        self.assertEqual(slots_by_key['intent.goblin.hook'],['actor_name','damage','target_name'])
+        self.assertEqual(slots_by_key['intent.drake.flee'],['actor_name','destination_name'])
+        self.assertEqual(slots_by_key['intent.goblin.guard'],['actor_name'])
+        self.assertEqual(slots_by_key['intent.drake.hold'],['actor_name'])
+        self.assertEqual({intent['kind'] for actor in pack.as_dict()['actors'] for intent in actor['intents']},
+                         set(model.V2_INTENT_KINDS))
+        self.assertEqual(manifest['manifest_hash'],'eb64a9c899fc17fb0215a4587bb6e890b5e964c4fd4f4f1fd6f8229ebc2bba11')
         self.assertEqual(manifest['extra_bank_keys'],[])
         self.assertEqual(manifest['manifest_hash'], event_manifest(load_pack(v2_example()))['manifest_hash'])
         receipt=pack_receipt(pack)
@@ -138,6 +175,11 @@ class DelvePackV2Tests(unittest.TestCase):
             bad=copy.deepcopy(d); mutate(bad)
             with self.assertRaises(PackError) as cm: load_pack(bad)
             self.assertEqual(cm.exception.code,code)
+        bad=copy.deepcopy(d)
+        entry=next(e for e in bad['bank']['entries'] if e['key']=='intent.drake.feed')
+        entry.update(fact_slots=['actor_name'],variants=['{{actor_name}}'],fallback='{{actor_name}}')
+        with self.assertRaises(PackError) as cm: load_pack(bad)
+        self.assertEqual(cm.exception.code,'E_BANK_MANIFEST_SLOTS')
 
     def test_mutation_gate_all_declared_boundary_values(self):
         base=v2_example(); tried=0; rejected=0
@@ -194,6 +236,33 @@ class DelvePackV2Tests(unittest.TestCase):
         print(f'M2 mutation gate: {tried} mutations tried, {rejected} rejected')
         self.mutation_counts=(tried,rejected)
 
+    def test_intent_contract_mutations_have_coded_rejections(self):
+        cases=(
+            ('unknown kind',lambda d:d['actors'][0]['intents'][0].update(kind='summon'), 'E_V2_INTENT'),
+            ('target type',lambda d:d['actors'][0]['intents'][0].update(target=['player']), 'E_SCHEMA'),
+            ('unknown target',lambda d:d['actors'][0]['intents'][0].update(target='enemy_everywhere'), 'E_V2_SELECTOR'),
+            ('damage type',lambda d:d['actors'][0]['intents'][0].update(damage=True), 'E_SCHEMA'),
+            ('negative damage',lambda d:d['actors'][0]['intents'][0].update(damage=-1), 'E_SCHEMA'),
+            ('roll type',lambda d:d['actors'][0]['intents'][0].update(roll=1), 'E_SCHEMA'),
+            ('roll actor target',lambda d:d['actors'][0]['intents'][0].update(roll=True), 'E_V2_INTENT'),
+            ('destination on attack',lambda d:d['actors'][0]['intents'][0].update(destination='near'), 'E_V2_INTENT'),
+            ('missing move destination',lambda d:d['actors'][0]['intents'][0].update(kind='move',consequence='move',
+                 fact_slots=['actor_name','destination_name']), 'E_V2_INTENT'),
+            ('wrong destination',lambda d:d['actors'][0]['intents'][1].update(destination='unknown_zone'), 'E_V2_REFERENCE'),
+            ('unknown consequence',lambda d:d['actors'][0]['intents'][0].update(consequence='spawn'), 'E_V2_INTENT'),
+            ('unknown cancel key',lambda d:d['actors'][0]['intents'][0].update(cancel_event_key='invented.cancel.event'), 'E_BANK_MANIFEST_MISSING'),
+            ('malformed cancel key',lambda d:d['actors'][0]['intents'][0].update(cancel_event_key='BAD KEY'), 'E_SCHEMA'),
+        )
+        for label,mutate,code in cases:
+            d=v2_example(); mutate(d)
+            with self.subTest(label=label), self.assertRaises(PackError) as cm:
+                load_pack(d)
+            self.assertEqual(cm.exception.code,code)
+        # A player-target attack can opt into the M1 two-draw rule.
+        d=v2_example(); attack=d['actors'][2]['intents'][1]
+        attack['target']='player'; attack['roll']=True
+        self.assertIsInstance(load_pack(d),model.V2Pack)
+
     def test_hash_is_process_stable_and_manifest_relevant_changes_hash(self):
         d=v2_example(); expected=event_manifest(load_pack(d))['manifest_hash']
         script="from tests.test_delve_pack_v2 import v2_example; from delve.pack import load_pack,event_manifest; print(event_manifest(load_pack(v2_example()))['manifest_hash'])"
@@ -208,8 +277,21 @@ class DelvePackV2Tests(unittest.TestCase):
         old['key']='chronicle.signature.changed'
         self.assertNotEqual(expected,event_manifest(load_pack(d))['manifest_hash'])
         d=v2_example(); d['actors'][0]['intents'][0]['fact_slots']=['zone']
-        entry=next(e for e in d['bank']['entries'] if e['key']=='intent.drake.bite')
-        entry.update(fact_slots=['zone'],variants=['{{zone}}'],fallback='{{zone}}')
+        # An invalid kind-specific slot set is rejected before bank validation.
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code,'E_V2_INTENT')
+        d=v2_example(); intent=d['actors'][1]['intents'][1]
+        intent.update(kind='strike',consequence='damage',damage=1,
+                      fact_slots=['actor_name','target_name','damage'])
+        old=next(e for e in d['bank']['entries'] if e['key']==intent['event_key'])
+        old.update(fact_slots=intent['fact_slots'],variants=['{{actor_name}} {{target_name}} {{damage}}'],
+                   fallback='{{actor_name}} {{target_name}} {{damage}}')
+        self.assertNotEqual(expected,event_manifest(load_pack(d))['manifest_hash'])
+        d=v2_example(); intent=d['actors'][0]['intents'][0]
+        old=next(e for e in d['bank']['entries'] if e['key']=='actor.intent.cancelled')
+        intent['cancel_event_key']='actor.intent.cancelled.custom'
+        d['bank']['entries'].append({'key':intent['cancel_event_key'],'fact_slots':['actor_name','target_name'],
+            'variants':['{{actor_name}} {{target_name}}'],'fallback':'{{actor_name}} {{target_name}}'})
         self.assertNotEqual(expected,event_manifest(load_pack(d))['manifest_hash'])
 
     def test_v2_rejects_v1_enemies_legend_fact_terminal_unknown_tag(self):

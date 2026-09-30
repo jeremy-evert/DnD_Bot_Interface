@@ -113,6 +113,22 @@ V2_SELECTORS = (
     "connected_zone", "living_prey", "highest_priority_target", "safe_destination",
     "adjacent_zone", "source_zone", "landing_zone", "player",
 )
+# M2.1b actor-intent contract.  Consequences are deliberately fixed by kind:
+# attacks (strike/ranged) -> damage; feed -> feed; move -> move; flee -> flee;
+# guard -> guard; hold_position -> none.  In particular, actor-vs-actor damage
+# is fixed by pack data and never consumes RNG.
+V2_INTENT_CONSEQUENCES = {
+    "strike": "damage", "ranged": "damage", "feed": "feed",
+    "move": "move", "flee": "flee", "guard": "guard",
+    "hold_position": "none",
+}
+V2_INTENT_KINDS = tuple(V2_INTENT_CONSEQUENCES)
+V2_INTENT_TARGETS = V2_SELECTORS
+V2_ACTOR_TARGETS = frozenset((
+    "actors_in_zone", "named_actor", "visible_actor", "living_prey",
+    "highest_priority_target",
+))
+V2_DESTINATION_KINDS = frozenset(("move", "flee", "hold_position"))
 V2_RESOURCES = ("momentum", "trick", "missile", "ward", "spark")
 V2_ABILITY_IDS = (
     "fighter.hold_door", "fighter.cleave", "fighter.guardbreak",

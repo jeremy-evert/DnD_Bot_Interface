@@ -39,6 +39,26 @@ Pack error codes (M1 meanings are preserved):
 | E_BANK_MANIFEST_MISSING | generated v2 event is absent from the bank |
 | E_BANK_MANIFEST_SLOTS | bank slot set differs from the generated manifest |
 | E_BANK_MANIFEST_FALLBACK | generated v2 event has an empty fallback |
+| E_V2_INTENT | v2 intent kind, consequence, destination, or field combination is invalid |
+
+M2.1b actor intent fields are: id, kind, selector, target, damage, roll,
+optional destination, consequence, event_key, fact_slots, and optional
+cancel_event_key (default ``actor.intent.cancelled``). The closed kind table is:
+
+| kind | consequence | destination | declaration slots |
+|---|---|---|---|
+| strike, ranged | damage | forbidden | actor_name, target_name, damage |
+| feed | feed | forbidden | actor_name, target_name, damage |
+| move | move | required | actor_name, destination_name |
+| flee | flee | required | actor_name, destination_name |
+| guard | guard | forbidden | actor_name |
+| hold_position | none | required | actor_name |
+
+Target and legacy selector values use the frozen v2 selector catalog. Only
+strike/ranged intents targeting ``player`` may roll; actor targets are fixed
+damage with no RNG. Destinations are an authored room ID or a zone used by an
+actor/object/material in that actor's room. Cancellation events supply
+actor_name and target_name.
 """
 import json, re
 import hashlib
@@ -625,7 +645,7 @@ _V2_SELECTOR_SET=set(m.V2_SELECTORS)
 _V2_CLASS_KEYS={'fighter':{'hold_door':('h','momentum'),'cleave':('c','momentum'),'guardbreak':('k','momentum')},'rogue':{'lure':('l','trick'),'slip':('z','trick'),'rig':('r','trick')},'wizard':{'magic_missile':('m','missile'),'ward':('w','ward'),'fireball':('f','spark')}}
 _V2_EFFECT_FIELDS={'damage_selector':{'type','selector','amount'},'damage_dice_selector':{'type','selector','count','die','bonus','auto_hit'},'signal':{'type','selector','kind'},'add_tag':{'type','selector','tag'},'remove_tag':{'type','selector','tag'},'move_actor':{'type','selector','destination'},'cancel_intent':{'type','selector'},'set_outcome_flag':{'type','flag'},'heal':{'type','amount'},'shield':{'type','amount','intents'},'stance':{'type','beats','selector'}}
 _V2_ABILITY_EFFECTS={'fighter.hold_door':('stance',),'fighter.cleave':('damage_selector',),'fighter.guardbreak':('cancel_intent','add_tag'),'rogue.lure':('add_tag','move_actor'),'rogue.slip':('move_actor','cancel_intent'),'rogue.rig':('add_tag',),'wizard.magic_missile':('damage_dice_selector',),'wizard.ward':('shield',),'wizard.fireball':('damage_selector','signal','signal')}
-_V2_SLOT_NAMES={'actor_name','target_name','zone','object_name','amount','damage','destination','signal','item_name','room_name','outcome'}
+_V2_SLOT_NAMES={'actor_name','target_name','zone','object_name','amount','damage','destination','destination_name','signal','item_name','room_name','outcome'}
 
 
 def _v2_list(v,p,allowed=None):
@@ -657,14 +677,17 @@ def _v2_event_manifest_data(d):
     events={k:tuple(sorted(slots)) for k,slots in {
         'room.enter':('room_name',),'room.return':('room_name',),'room.description':('room_name',),
         'move.blocked':('actor_name',),'move.no_exit':('destination',),'target.unknown':('target_name',),
-        'terminal.quit':(),'terminal.closed':(),'enemy.defeated':('actor_name',),'intent.cancelled':('actor_name',),
+        'terminal.quit':(),'terminal.closed':(),'enemy.defeated':('actor_name',),
+        'actor.intent.cancelled':('actor_name','target_name'),'intent.cancelled':('actor_name',),
         'material.reaction':('amount','zone'),'chronicle.line':('outcome',)}.items()}
     def add(key,slots):
         slots=tuple(sorted(slots))
         if key in events and events[key]!=slots: _err('E_V2_ABILITY','$.events','conflicting slots for '+key)
         events[key]=slots
     for actor in d['actors']:
-        for intent in actor['intents']: add(intent['event_key'],intent['fact_slots'])
+        for intent in actor['intents']:
+            add(intent['event_key'],intent['fact_slots'])
+            add(intent.get('cancel_event_key','actor.intent.cancelled'),('actor_name','target_name'))
     for rule in d['reaction_table']: add(rule['event_key'],rule['fact_slots']); add('material.'+rule['id'].lower()+'.'+rule['name'],rule['fact_slots'])
     for action in d['class_actions']: add(action['event_key'],())
     for terminal in d['terminals']: add(terminal['event_key'],())
@@ -742,12 +765,43 @@ def _validate_v2_pack(d):
         if not intents: _err('E_SCHEMA',p+'.intents','actor needs intent definitions')
         seen_intents=set()
         for j,intent in enumerate(intents):
-            q=f'{p}.intents[{j}]'; _obj(intent,q,('id','kind','selector','event_key','fact_slots'))
+            q=f'{p}.intents[{j}]'
+            _obj(intent,q,('id','kind','selector','target','damage','roll','consequence','event_key','fact_slots'),
+                 ('destination','cancel_event_key'))
             ident=_id(intent['id'],q+'.id')
             if ident in seen_intents: _err('E_ID_DUPLICATE',q+'.id','duplicate intent id')
-            seen_intents.add(ident); _str(intent['kind'],q+'.kind')
-            if intent['selector'] not in selectors: _err('E_V2_SELECTOR',q+'.selector','unknown selector')
-            _v2_key(intent['event_key'],q+'.event_key'); _v2_slots(intent['fact_slots'],q+'.fact_slots')
+            seen_intents.add(ident)
+            kind=_str(intent['kind'],q+'.kind')
+            if kind not in m.V2_INTENT_KINDS: _err('E_V2_INTENT',q+'.kind','unknown intent kind')
+            selector=_str(intent['selector'],q+'.selector')
+            if selector not in selectors: _err('E_V2_SELECTOR',q+'.selector','unknown selector')
+            target=_str(intent['target'],q+'.target')
+            if target not in selectors or target not in m.V2_INTENT_TARGETS:
+                _err('E_V2_SELECTOR',q+'.target','unknown intent target selector')
+            _int(intent['damage'],q+'.damage',0)
+            roll=_bool(intent['roll'],q+'.roll')
+            needs_destination=kind in m.V2_DESTINATION_KINDS
+            if needs_destination != ('destination' in intent):
+                _err('E_V2_INTENT',q+'.destination',
+                     'destination is required for movement/hold intents and forbidden otherwise')
+            if needs_destination: _id(intent['destination'],q+'.destination')
+            consequence=_str(intent['consequence'],q+'.consequence')
+            if consequence != m.V2_INTENT_CONSEQUENCES[kind]:
+                _err('E_V2_INTENT',q+'.consequence','consequence does not match intent kind')
+            if roll and (kind not in ('strike','ranged') or target!='player'):
+                _err('E_V2_INTENT',q+'.roll','only actor-vs-player attacks may roll')
+            _v2_key(intent.get('cancel_event_key','actor.intent.cancelled'),q+'.cancel_event_key')
+            _v2_key(intent['event_key'],q+'.event_key')
+            expected_slots={
+                'strike':('actor_name','target_name','damage'),
+                'ranged':('actor_name','target_name','damage'),
+                'feed':('actor_name','target_name','damage'),
+                'move':('actor_name','destination_name'),
+                'flee':('actor_name','destination_name'),
+                'guard':('actor_name',), 'hold_position':('actor_name',),
+            }[kind]
+            if tuple(sorted(_v2_slots(intent['fact_slots'],q+'.fact_slots'))) != tuple(sorted(expected_slots)):
+                _err('E_V2_INTENT',q+'.fact_slots','declaration slots do not match intent kind')
     if len(actor_ids)!=len(d['actors']): _err('E_ID_DUPLICATE','$.actors','duplicate actor id')
     if len(actor_ids)<3: _err('E_SCHEMA','$.actors','multi-actor pack requires at least three actors')
     object_ids=set()
@@ -766,6 +820,15 @@ def _validate_v2_pack(d):
         if 'object_id' in mat and mat['object_id'] not in object_ids: _err('E_V2_REFERENCE',p+'.object_id','unknown authored object')
         if 'connection_to_zone' in mat: _str(mat['connection_to_zone'],p+'.connection_to_zone')
     if len(material_ids)!=len(d['materials']): _err('E_ID_DUPLICATE','$.materials','duplicate material id')
+    for i,actor in enumerate(d['actors']):
+        actor_zones={other['zone'] for other in d['actors'] if other['room_id']==actor['room_id']}
+        actor_zones.update(obj['zone'] for obj in d['objects'] if obj['room_id']==actor['room_id'])
+        actor_zones.update(mat['zone'] for mat in d['materials'] if mat['room_id']==actor['room_id'])
+        valid_destinations=set(rooms)|actor_zones
+        for j,intent in enumerate(actor['intents']):
+            if 'destination' in intent and intent['destination'] not in valid_destinations:
+                _err('E_V2_REFERENCE',f'$.actors[{i}].intents[{j}].destination',
+                     'destination must be a room or a zone in the actor room')
     rules=_arr(d['reaction_table'],'$.reaction_table')
     if len(rules)!=12: _err('E_V2_RULE','$.reaction_table','exactly twelve reaction rules required')
     for i,(rule,spec) in enumerate(zip(rules,_V2_RULES)):

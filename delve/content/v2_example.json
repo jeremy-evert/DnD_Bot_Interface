@@ -37,13 +37,67 @@
       "ecology_profile": "kiln_drake",
       "intents": [
         {
-          "id": "bite",
-          "kind": "strike",
-          "selector": "named_actor",
-          "event_key": "intent.drake.bite",
+          "id": "feed",
+          "kind": "feed",
+          "selector": "visible_actor",
+          "target": "living_prey",
+          "damage": 8,
+          "roll": false,
+          "consequence": "feed",
+          "event_key": "intent.drake.feed",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "flee",
+          "kind": "flee",
+          "selector": "visible_actor",
+          "target": "safe_destination",
+          "damage": 0,
+          "roll": false,
+          "consequence": "flee",
+          "event_key": "intent.drake.flee",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "destination_name"
+          ],
+          "destination": "balcony"
+        },
+        {
+          "id": "move",
+          "kind": "move",
+          "selector": "visible_actor",
+          "target": "connected_zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "move",
+          "event_key": "intent.drake.move",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "destination_name"
+          ],
+          "destination": "near"
+        },
+        {
+          "id": "hold",
+          "kind": "hold_position",
+          "selector": "visible_actor",
+          "target": "zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "none",
+          "event_key": "intent.drake.hold",
+          "cancel_event_key": "actor.intent.cancelled",
           "fact_slots": [
             "actor_name"
-          ]
+          ],
+          "destination": "far"
         }
       ],
       "appetite": [
@@ -76,7 +130,28 @@
           "id": "hook_strike",
           "kind": "strike",
           "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
           "event_key": "intent.goblin.hook",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "hook_guard",
+          "kind": "guard",
+          "selector": "visible_actor",
+          "target": "zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "guard",
+          "event_key": "intent.goblin.guard",
+          "cancel_event_key": "actor.intent.cancelled",
           "fact_slots": [
             "actor_name"
           ]
@@ -108,9 +183,32 @@
           "id": "sling",
           "kind": "ranged",
           "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
           "event_key": "intent.goblin.slinger",
+          "cancel_event_key": "actor.intent.cancelled",
           "fact_slots": [
-            "actor_name"
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "sling_player",
+          "kind": "ranged",
+          "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
+          "event_key": "intent.goblin.slinger_player",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
           ]
         }
       ],
@@ -514,6 +612,17 @@
         "fallback": "The world remembers."
       },
       {
+        "key": "actor.intent.cancelled",
+        "fact_slots": [
+          "actor_name",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{target_name}}"
+      },
+      {
         "key": "chain.scent.hunt.feed",
         "fact_slots": [],
         "variants": [
@@ -580,7 +689,51 @@
         "fallback": "{{actor_name}}"
       },
       {
-        "key": "intent.drake.bite",
+        "key": "intent.drake.feed",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "intent.drake.flee",
+        "fact_slots": [
+          "actor_name",
+          "destination_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{destination_name}}"
+        ],
+        "fallback": "{{actor_name}} {{destination_name}}"
+      },
+      {
+        "key": "intent.drake.hold",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "intent.drake.move",
+        "fact_slots": [
+          "actor_name",
+          "destination_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{destination_name}}"
+        ],
+        "fallback": "{{actor_name}} {{destination_name}}"
+      },
+      {
+        "key": "intent.goblin.guard",
         "fact_slots": [
           "actor_name"
         ],
@@ -592,22 +745,38 @@
       {
         "key": "intent.goblin.hook",
         "fact_slots": [
-          "actor_name"
+          "actor_name",
+          "damage",
+          "target_name"
         ],
         "variants": [
-          "{{actor_name}}"
+          "{{actor_name}} {{damage}} {{target_name}}"
         ],
-        "fallback": "{{actor_name}}"
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
       },
       {
         "key": "intent.goblin.slinger",
         "fact_slots": [
-          "actor_name"
+          "actor_name",
+          "damage",
+          "target_name"
         ],
         "variants": [
-          "{{actor_name}}"
+          "{{actor_name}} {{damage}} {{target_name}}"
         ],
-        "fallback": "{{actor_name}}"
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "intent.goblin.slinger_player",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
       },
       {
         "key": "material.r1.oil_flash",

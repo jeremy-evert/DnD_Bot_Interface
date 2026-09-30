@@ -27,6 +27,8 @@ class Creature:
     max_hp: int | None = None
     inventory: list[str] = field(default_factory=list)
     character_class: str = ""
+    spell_charges: int = 0
+    max_spell_charges: int = 0
 
     def __post_init__(self) -> None:
         if self.max_hp is None:
@@ -66,6 +68,13 @@ def attack(attacker: Creature, defender: Creature, roller: Roller = roll_die) ->
     damage = max(1, roller(attacker.damage_die) + attacker.damage_bonus)
     defender.hp = max(0, defender.hp - damage)
     return AttackResult(roll, total, True, damage)
+
+
+def magic_missile(defender: Creature, roller: Roller = roll_die) -> AttackResult:
+    """Cast Magic Missile: never misses, deals 2d4 damage."""
+    damage = roller(4) + roller(4)
+    defender.hp = max(0, defender.hp - damage)
+    return AttackResult(0, 0, True, damage)
 
 
 def make_hero() -> Creature:

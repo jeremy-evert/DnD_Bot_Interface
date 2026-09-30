@@ -60,8 +60,12 @@ def run_combat(
         print(f"{enemy.name}: {enemy.hp}/{enemy.max_hp} HP, AC {enemy.armor_class}.")
 
         if game.combat_turn == "hero":
+            spell_menu = (
+                f"[C]ast magic missile ({game.hero.spell_charges}), "
+                if game.hero.max_spell_charges else ""
+            )
             raw_choice = input(
-                "Your turn. [A]ttack, [U]se potion, [S]tatus: "
+                f"Your turn. [A]ttack, {spell_menu}[U]se potion, [S]tatus: "
             ).strip()
             choice = resolve_combat_command(raw_choice)
 
@@ -114,6 +118,35 @@ def run_combat(
                             f"You notice {item} among the fallen {enemy.name}.",
                         )
 
+            elif choice in {"c", "cast"} and game.hero.max_spell_charges:
+                result = game.player_cast_magic_missile(roller)
+                if result is None:
+                    if recorder:
+                        recorder.input(raw_choice, game, action="cast_magic_missile", outcome="no charges")
+                    print("You have no magic missiles left this fight.")
+                else:
+                    if recorder:
+                        recorder.input(
+                            raw_choice, game, action="cast_magic_missile", outcome="hit",
+                            details={
+                                "attacker": game.hero.name,
+                                "target": enemy.name,
+                                "damage": result.damage,
+                                "enemy_hp": enemy.hp,
+                                "charges_left": game.hero.spell_charges,
+                            },
+                        )
+                    print(
+                        f"{game.hero.name} hurls a magic missile at {enemy.name} "
+                        f"for {result.damage} damage! ({game.hero.spell_charges} left)"
+                    )
+                    if not enemy.alive:
+                        emit(
+                            narrator,
+                            "enemy_defeated",
+                            {"hero": game.hero.name, "enemy": enemy.name, "room": game.room.name},
+                            f"{enemy.name} falls.",
+                        )
             elif choice in {"u", "use", "potion"}:
                 hp_before = game.hero.hp
                 used, healed = game.player_use_potion()

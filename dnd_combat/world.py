@@ -51,7 +51,11 @@ def make_character(choice: str, name: str) -> Creature:
         hp, armor_class, attack_bonus, damage_die, damage_bonus, initiative_bonus = choices[choice.lower()]
     except KeyError as error:
         raise ValueError(f"Unknown character choice: {choice}") from error
-    return Creature(name, hp, armor_class, attack_bonus, damage_die, damage_bonus, initiative_bonus, character_class=choice.title())
+    charges = 3 if choice.lower() == "wizard" else 0
+    return Creature(
+        name, hp, armor_class, attack_bonus, damage_die, damage_bonus, initiative_bonus,
+        character_class=choice.title(), spell_charges=charges, max_spell_charges=charges,
+    )
 
 
 def make_hobgoblin() -> Creature:

@@ -186,6 +186,8 @@ class Adventure:
         """
         if not self.in_combat or self.combat_turn != "hero":
             raise ValueError("It is not the hero's turn.")
+        if self.hero.character_class.lower() != "wizard":
+            raise ValueError("Only a wizard can cast magic missile.")
         if self.hero.spell_charges <= 0:
             return None
         self.hero.spell_charges -= 1

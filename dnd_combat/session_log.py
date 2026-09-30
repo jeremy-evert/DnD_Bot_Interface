@@ -11,6 +11,7 @@ import time
 from uuid import uuid4
 
 from .narrator import Narrator
+from .terminal import normalize_narration
 
 
 def timestamp() -> str:
@@ -162,7 +163,7 @@ class RecordingNarrator(Narrator):
         if narrator_failed:
             rendered = plain_text
         latency_ms = (time.perf_counter() - started) * 1000
-        response = rendered.partition("\nDM: ")[2] if "\nDM: " in rendered else ""
+        _, response = normalize_narration(plain_text, rendered)
         fallback = getattr(self.narrator, "last_narration_fallback", is_llm and not response)
         self.recorder.record(
             "narration",

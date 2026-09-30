@@ -32,6 +32,37 @@ def choose_character(recorder: SessionRecorder | None = None) -> Creature:
         print("Choose fighter, rogue, or wizard.")
 
 
+def _emit_defeat_and_loot(
+    game: Adventure,
+    enemy: Creature,
+    items_before: set[str],
+    narrator: Narrator,
+) -> None:
+    emit(
+        narrator,
+        "enemy_defeated",
+        {
+            "hero": game.hero.name,
+            "enemy": enemy.name,
+            "room": game.room.name,
+        },
+        f"{enemy.name} falls.",
+    )
+    new_items = [item for item in game.room.items if item not in items_before]
+    for item in new_items:
+        emit(
+            narrator,
+            "item_found",
+            {
+                "room": game.room.name,
+                "item": item,
+                "hero": game.hero.name,
+                "source": enemy.name,
+            },
+            f"You notice {item} among the fallen {enemy.name}.",
+        )
+
+
 def run_combat(
     game: Adventure,
     roller: Roller = roll_die,
@@ -92,33 +123,10 @@ def run_combat(
                 )
 
                 if not enemy.alive:
-                    emit(
-                        narrator,
-                        "enemy_defeated",
-                        {
-                            "hero": game.hero.name,
-                            "enemy": enemy.name,
-                            "room": game.room.name,
-                        },
-                        f"{enemy.name} falls.",
-                    )
-                    new_items = [
-                        item for item in game.room.items if item not in items_before
-                    ]
-                    for item in new_items:
-                        emit(
-                            narrator,
-                            "item_found",
-                            {
-                                "room": game.room.name,
-                                "item": item,
-                                "hero": game.hero.name,
-                                "source": enemy.name,
-                            },
-                            f"You notice {item} among the fallen {enemy.name}.",
-                        )
+                    _emit_defeat_and_loot(game, enemy, items_before, narrator)
 
             elif choice in {"c", "cast"} and game.hero.max_spell_charges:
+                items_before = set(game.room.items)
                 result = game.player_cast_magic_missile(roller)
                 if result is None:
                     if recorder:
@@ -141,12 +149,7 @@ def run_combat(
                         f"for {result.damage} damage! ({game.hero.spell_charges} left)"
                     )
                     if not enemy.alive:
-                        emit(
-                            narrator,
-                            "enemy_defeated",
-                            {"hero": game.hero.name, "enemy": enemy.name, "room": game.room.name},
-                            f"{enemy.name} falls.",
-                        )
+                        _emit_defeat_and_loot(game, enemy, items_before, narrator)
             elif choice in {"u", "use", "potion"}:
                 hp_before = game.hero.hp
                 used, healed = game.player_use_potion()

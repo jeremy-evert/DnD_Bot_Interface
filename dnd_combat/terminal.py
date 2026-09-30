@@ -7,16 +7,22 @@ from .combat import AttackResult
 from .narrator import Narrator
 
 
+def normalize_narration(plain_text: str, narrated: str) -> tuple[str, str | None]:
+    """Return displayed addition and normalized recorded response."""
+    if narrated == plain_text:
+        return "", None
+    addition = narrated[len(plain_text):].lstrip("\n") if narrated.startswith(plain_text) else narrated
+    response = addition[4:] if addition.startswith("DM: ") else addition
+    return addition, response or None
+
+
 def emit(narrator: Narrator, event: str, facts: dict, plain_text: str) -> None:
     """Show the engine's plain text at once, then the narration when it arrives."""
     print(plain_text, flush=True)
     narrated = narrator.narrate(event, facts, plain_text)
-    if narrated == plain_text:
-        return
-    if narrated.startswith(plain_text):
-        narrated = narrated[len(plain_text):].lstrip("\n")
-    if narrated:
-        print(narrated)
+    addition, _ = normalize_narration(plain_text, narrated)
+    if addition:
+        print(addition)
 
 
 def show_status(game: Adventure) -> None:

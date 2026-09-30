@@ -100,6 +100,8 @@ NOT_A_REFUSAL = {
     "object.cup": "Successful object inspection output.",
     "object.leaf": "Successful object inspection output.",
     "object.bowl": "Successful object inspection output.",
+    "hazard.hint.unknown": "Informational hazard description; it does not refuse inspection.",
+    "hazard.hint.known": "Informational hazard description; it does not refuse inspection.",
 }
 
 

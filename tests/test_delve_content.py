@@ -98,9 +98,11 @@ class DelveContentTests(unittest.TestCase):
         self.assertEqual(state.terminal, 'victory')
         self.assertEqual(set(state.known_clues), {'mira_route', 'chart_route', 'dome_route'})
         self.assertEqual(sum(event.key == 'fact.payoff' for event in events), 1)
+        self.assertTrue(any('shoved beneath the collapse' in line for line in transcript))
         self.assertEqual(sum(event.key == 'enemy.defeated' and event.fact_slots.get('enemy_name') == 'Goblin' for event in events), 1)
         self.assertEqual(sum(event.key == 'enemy.defeated' and event.fact_slots.get('enemy_name') == 'Hobgoblin Captain' for event in events), 1)
         self.assertIn('hazard.trigger', [event.key for event in events])
+        self.assertIn('vault is yours', transcript[-1])
         self.assertEqual(len(winning_actions), 21)
         print(f'Winning route actions used: {len(winning_actions)}')
 
@@ -112,6 +114,38 @@ class DelveContentTests(unittest.TestCase):
         blind, blind_events, _ = run(1, blind_actions)
         self.assertFalse(blind.known_facts)
         self.assertTrue(blind.player['hp'] < blind.player['max_hp'] or blind.terminal == 'dead')
+
+    def test_outcome_based_victory_allows_blind_kill(self):
+        pack = load_engine_ready_pack(PACK_PATH)
+        result = None
+        # Find a deterministic fighter seed whose blind brace/attack policy wins.
+        for seed in range(64):
+            state = DelveState.new(pack, seed, 'fighter')
+            engine = Engine(pack, state)
+            memory = RenderMemory()
+            transcript = []
+            actions = [Action('attack', 'goblin') for _ in range(6)] + [
+                Action('move', direction='east'), Action('move', direction='east'),
+                Action('move', direction='north'),
+            ]
+            actions.extend(Action('brace' if i % 2 == 0 else 'attack',
+                                  None if i % 2 == 0 else 'captain') for i in range(20))
+            for action in actions:
+                for event in engine.apply(action):
+                    transcript.append(render_event(event, pack, seed, memory))
+                if state.terminal != 'playing':
+                    break
+            if state.terminal == 'victory' and not state.known_facts:
+                result = state, transcript
+                break
+
+        self.assertIsNotNone(result, 'no blind fighter victory found in seeds 0..63')
+        state, transcript = result
+        self.assertEqual(state.terminal, 'victory')
+        self.assertEqual(state.enemies['captain']['hp'], 0)
+        self.assertFalse(state.known_clues)
+        self.assertFalse(state.known_facts)
+        self.assertIn('Captain is beaten', transcript[-1])
 
     def test_scripted_event_bank_coverage_renders_variants_without_problems(self):
         pack = load_engine_ready_pack(PACK_PATH)

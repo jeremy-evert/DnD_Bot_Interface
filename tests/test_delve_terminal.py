@@ -190,12 +190,13 @@ class DelveTerminalTests(unittest.TestCase):
         self.assertEqual(invalid_target.message_key, "target.unknown")
 
         state.room_id = "hollow_vault"
+        state.flags.add("captain_route_known")
         before = copy.deepcopy(state.snapshot())
         for target in ("collapse", "ceiling", "hazard", "arch"):
             with self.subTest(hazard=target):
                 problem = parse_command(f"x {target}", state, self.pack)
                 self.assertIsInstance(problem, ParseProblem)
-                self.assertIn("shove an enemy", problem.text)
+                self.assertIn("shove can put", problem.text.casefold())
                 self.assertEqual(before, state.snapshot())
 
     def test_enemy_look_resolves_without_turn_or_state_change(self):
@@ -307,8 +308,28 @@ class DelveTerminalTests(unittest.TestCase):
         actions = [""] + ["hit goblin"] * 6 + ["east", "east", "north", "x collapse", "q"]
         code, output = self.play(actions, seed=1)
         self.assertEqual(code, 0)
-        self.assertIn("This room has a falling ceiling collapse. You can shove an enemy into it.", output)
+        self.assertIn("stone above looks loose", output.casefold())
+        self.assertNotIn("shove can put", output.casefold())
         self.assertIn("HOLLOW VAULT", output)
+
+    def test_collapse_hint_changes_after_route_fact_is_known(self):
+        state = DelveState.new(self.pack, 1, "fighter")
+        state.room_id = "hollow_vault"
+        unknown = parse_command("x collapse", state, self.pack)
+        self.assertIn("nothing tells you where he stands", unknown.text.casefold())
+        state.flags.add("captain_route_known")
+        known = parse_command("x collapse", state, self.pack)
+        self.assertIn("shove can put", known.text.casefold())
+
+    def test_input_unicode_errors_and_surrogates_do_not_crash_or_echo(self):
+        from io import StringIO
+        cases = [UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid start byte'), '\ud800']
+        for bad in cases:
+            with self.subTest(bad=repr(bad)), patch('builtins.input', side_effect=[bad, 'q']), patch('sys.stdout', StringIO()) as output:
+                self.assertEqual(terminal.main(['--seed','1','--class','fighter']), 0)
+                rendered=output.getvalue()
+                self.assertIn("[undecodable input]", rendered)
+                self.assertNotIn('\\ud800', rendered)
 
     def test_drink_rainwater_uses_held_offering_bowl(self):
         actions = [""] + ["hit goblin"] * 6 + ["east", "get offering bowl", "drink rainwater", "q"]

@@ -573,10 +573,6 @@
         {
           "kind": "enemy_dead",
           "enemy_id": "captain"
-        },
-        {
-          "kind": "fact_known",
-          "fact_id": "captain_route"
         }
       ],
       "event_key": "terminal.victory"
@@ -924,6 +920,28 @@
         "fallback": "Another piece. It fits."
       },
       {
+        "key": "hazard.hint.unknown",
+        "fact_slots": [],
+        "variants": [
+          "The stone above looks loose, but nothing tells you where he stands.",
+          "A bad crack runs through the ceiling; you do not yet know where he is beneath it.",
+          "Dust sifts from the arch. The route under it is still a guess.",
+          "The vault roof may give way, but you have not placed the Captain below it."
+        ],
+        "fallback": "The stone above looks loose, but nothing tells you where he stands."
+      },
+      {
+        "key": "hazard.hint.known",
+        "fact_slots": [],
+        "variants": [
+          "You know his route now: a shove can put him under the loose stone.",
+          "The clues line up. A shove can put the Captain beneath the cracked arch.",
+          "You have marked where he stands; shove him under the failing ceiling.",
+          "The route is clear now. A well-placed shove can bring the stone down on him."
+        ],
+        "fallback": "You know his route now: a shove can put him under the loose stone."
+      },
+      {
         "key": "fact.payoff",
         "fact_slots": [
           "fact_label"
@@ -942,13 +960,13 @@
         "key": "terminal.victory",
         "fact_slots": [],
         "variants": [
-          "He always stood in that doorway, under stone that was always going to fall. You noticed.",
-          "Mira named the doorway, the chart marked the fracture, the dome proved it would fall. You connected them.",
-          "Three clues, one doorway, one ceiling waiting to drop. You read it right.",
-          "You worked it out: his favorite doorway sat under the dome’s broken seam.",
-          "Habit, fracture, falling stone. You put them together, and the vault is yours."
+          "The Hobgoblin Captain is down. The vault is yours.",
+          "The Captain falls, and the vault falls quiet.",
+          "You stood your ground and brought the Captain down. The vault is yours.",
+          "The Captain will threaten this doorway no more. You have won the vault.",
+          "Steel, nerve, or a well-timed collapse: the Captain is beaten, and the vault is yours."
         ],
-        "fallback": "He always stood in that doorway, under stone that was always going to fall. You noticed."
+        "fallback": "The Hobgoblin Captain is down. The vault is yours."
       },
       {
         "key": "terminal.death",
@@ -969,15 +987,12 @@
         "key": "terminal.retry",
         "fact_slots": [],
         "variants": [
-          "Brace when the fists rise; throw silver when the guard goes up.",
-          "Mira, the star chart, and the dome each hold a piece. Collect all three before the vault.",
-          "Every move feeds the patrol. Take the short way, and look before you walk.",
-          "Read the telegraph, then answer it: brace the heavy blow, shove the swing.",
-          "Give Mira her ring, then look at her. She knows where the Captain stands.",
-          "Pick up the silver leaf in the gallery. His guard hates it.",
-          "Save the offering bowl for the vault. One swallow can decide the fight."
+          "The vault answers to what you have learned; Mira, the chart and the dome know its habits.",
+          "Mira, the star chart and the dome each remember a piece of the vault’s habits.",
+          "Look to Mira, the chart and the dome before facing the vault again.",
+          "The gallery holds the route: Mira, the chart and the dome each tell part of it."
         ],
-        "fallback": "Brace when the fists rise; throw silver when the guard goes up."
+        "fallback": "The vault answers to what you have learned; Mira, the chart and the dome know its habits."
       },
       {
         "key": "clue.mira",

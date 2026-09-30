@@ -5,6 +5,11 @@ import re
 from .engine import Action
 
 
+def _bank_text(pack, key):
+    entry = next((entry for entry in pack.bank if entry.key == key), None)
+    return entry.fallback if entry else "The hazard is difficult to read."
+
+
 @dataclass(frozen=True)
 class ParseProblem:
     message_key: str
@@ -122,7 +127,8 @@ def _hazard_problem(query, state, pack):
             names.update(("ceiling", "arch", "collapse", "hazard"))
         if normalized in names or any(word.startswith(normalized) for name in names for word in name.split()):
             if hazard.tag == "collapse":
-                text = "This room has a falling ceiling collapse. You can shove an enemy into it."
+                known = "captain_route_known" in state.flags
+                text = _bank_text(pack, "hazard.hint.known" if known else "hazard.hint.unknown")
             elif hazard.tag == "fire":
                 text = "This room has a fire hazard. It burns when you enter."
             else:

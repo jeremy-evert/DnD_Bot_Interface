@@ -47,6 +47,21 @@ class PackTests(unittest.TestCase):
         self.assertEqual(first,second)
         with self.assertRaises(FrozenInstanceError): first.id='changed'
 
+    def test_terminal_set_requires_victory_and_exactly_one_death(self):
+        self.assertEqual(load_pack(EXAMPLE).id, 'two_room_demo')
+        shipped=Path(__file__).parents[1]/'delve/content/mossy_fast_slice.json'
+        self.assertTrue(load_engine_ready_pack(shipped).id)
+        for remove_kind in ('victory', 'death'):
+            d=copy.deepcopy(EXAMPLE)
+            d['terminals']=[t for t in d['terminals'] if t['kind']!=remove_kind]
+            with self.subTest(remove_kind=remove_kind), self.assertRaises(PackError) as cm: load_pack(d)
+            self.assertEqual(cm.exception.code, 'E_TERMINAL_MISSING')
+        d=copy.deepcopy(EXAMPLE)
+        d['terminals'].append(copy.deepcopy(next(t for t in d['terminals'] if t['kind']=='death')))
+        d['terminals'][-1]['id']='death_two'
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code, 'E_TERMINAL_MISSING')
+
     def test_strict_json_rejects_duplicate_keys_and_nonstandard_constants(self):
         valid=json.dumps(EXAMPLE)
         duplicate=valid.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1', 1)

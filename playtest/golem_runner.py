@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import stat
@@ -61,6 +62,7 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
     capsule = str(Path(capsule_path).resolve()) if capsule_path else ""
     session = str(Path(session_path).resolve()) if session_path else ""
     replies = str(Path(capsule).parent / "replies") if capsule else ""
+    repo = str(Path(__file__).resolve().parent.parent)
     hits = []
     def strings(value):
         if isinstance(value, str):
@@ -141,6 +143,86 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
             return [(command, False)]
         return [(" ".join(tokens), is_exact_launcher(tokens)) for tokens in segments]
 
+    def path_audit(command, event_raw):
+        """Resolve simple path operands against the capsule and shell-local cd state."""
+        segments = split_command(command)
+        if not capsule:
+            return []
+        if segments is None:
+            return [{"fragment": "command syntax", "reason": "UNRESOLVED_PATH", "event": event_raw}]
+        cwd = Path(capsule)
+        hits = []
+        forbidden_roots = [Path(value) for value in (session, replies, repo) if value]
+        protected_names = {"transcript.jsonl", "manifest.json", "frames.jsonl"}
+
+        def resolved_path(token, base):
+            if base is None:
+                return None, True
+            expanded = token
+            expanded = expanded.replace("${HOME}", os.environ.get("HOME", "${HOME}"))
+            expanded = expanded.replace("$HOME", os.environ.get("HOME", "$HOME"))
+            expanded = os.path.expanduser(expanded)
+            unresolved = bool(re.search(r"\$[A-Za-z_{]|[*?\[\]{}]", expanded))
+            if unresolved:
+                return None, True
+            path = Path(expanded)
+            if not path.is_absolute():
+                path = base / path
+            return Path(os.path.normpath(str(path))), False
+
+        def forbidden_path(path):
+            if any(path == root or root in path.parents for root in forbidden_roots):
+                return True
+            return any(part in protected_names or part == ".git" for part in path.parts)
+
+        for tokens in segments:
+            if not tokens:
+                continue
+            if tokens[0] in {"pushd", "popd"}:
+                hits.append({"fragment": tokens[0], "reason": "UNRESOLVED_PATH", "event": event_raw})
+                continue
+            exempt = is_exact_launcher(tokens)
+            if exempt:
+                continue
+            command_name = tokens[0].rsplit("/", 1)[-1]
+            if command_name == "cd":
+                target = tokens[1] if len(tokens) > 1 else "~"
+                resolved, unresolved = resolved_path(target, cwd)
+                if unresolved:
+                    hits.append({"fragment": target, "reason": "UNRESOLVED_PATH", "event": event_raw})
+                    cwd = None
+                else:
+                    cwd = resolved
+                    if forbidden_path(cwd):
+                        hits.append({"fragment": str(cwd), "reason": "FORBIDDEN_PATH", "event": event_raw})
+                continue
+            if cwd is None:
+                hits.append({"fragment": "cwd", "reason": "UNRESOLVED_PATH", "event": event_raw})
+                continue
+            path_operand_commands = {
+                "cat", "head", "tail", "less", "more", "nl", "wc", "stat", "file",
+                "readlink", "realpath", "sha256sum", "md5sum", "cp", "mv", "rm",
+                "touch", "chmod", "chown", "find", "ls", "du", "file",
+            }
+            for token in tokens[1:]:
+                # Options and ordinary words are not paths. Slash, dot-prefix,
+                # tilde, variable, and glob syntax identify path operands.
+                path_like = ("/" in token or token.startswith((".", "~")) or
+                             "$" in token or
+                             (command_name in path_operand_commands and
+                              any(char in token for char in "*?[]{}")))
+                if not path_like or token.startswith("-"):
+                    continue
+                resolved, unresolved = resolved_path(token, cwd)
+                if unresolved:
+                    # A literal traversal combined with shell expansion cannot
+                    # be bounded safely. Plain outside paths (for example
+                    # ../../etc/hostname) still resolve and are not forbidden.
+                    hits.append({"fragment": token, "reason": "UNRESOLVED_PATH", "event": event_raw})
+                elif forbidden_path(resolved):
+                    hits.append({"fragment": str(resolved), "reason": "FORBIDDEN_PATH", "event": event_raw})
+        return hits
+
     for event in events:
         raw = event if isinstance(event, str) else json.dumps(event, sort_keys=True)
         candidates = list(strings(event))
@@ -150,6 +232,7 @@ def audit_commands(events, capsule_path=None, session_path=None, game_id="dnd_co
         audited = [(candidate, False) for candidate in candidates]
         for command in commands:
             audited.extend(command_fragments(command))
+            hits.extend(path_audit(command, raw))
         for fragment in (*forbidden, *((session,) if session else ()), *((replies,) if replies else ())):
             found = False
             for candidate, exempt in audited:
@@ -418,12 +501,12 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
                     elif terminal == "quit": game_termination, stop_reason = "quit", "player_stop"
                     elif no_progress >= 3: stop_reason = "no_progress"
                     elif turns >= turn_cap: stop_reason = "cap"
+                    if stop_reason in {"won", "dead", "cap", "no_progress", "player_stop"}:
+                        # Establish the boundary before the reply becomes visible:
+                        # an acknowledgement may arrive while publication returns.
+                        terminal_journal_offset = journal_path.stat().st_size
                     _controller_reply(replies / inbox.name, {"output": output, "turn": turns,
                         "terminated": stop_reason, "request_id": request_id, "nonce": nonce})
-                    if stop_reason in {"won", "dead", "cap", "no_progress", "player_stop"}:
-                        # The terminal reply is now visible to the golem. Only journal
-                        # bytes appended beyond this point can acknowledge its result.
-                        terminal_journal_offset = journal_path.stat().st_size
                     if stop_reason: controller_stop = True; break
                 except Exception as exc:
                     protocol_error = True; stop_reason = "ipc_error"
@@ -482,11 +565,13 @@ def run_golem(session_dir, run_dir, *, persona="explorer", model="gpt-6-luna",
     final_ack_seen = (journal_consistent and terminal_journal_offset is not None and turns > 0 and
                       journal_row_offsets[-1] >= terminal_journal_offset and journal_rows[-1]["turn_id"] == turns)
     end = _game_manifest(game_id) if game_id == "delve" else _game_manifest()
-    audit_status = "VIOLATED" if hits else "CLEAN" if recognized else "UNVERIFIABLE"
+    definite_hits = [hit for hit in hits if hit.get("reason") != "UNRESOLVED_PATH"]
+    audit_status = ("VIOLATED" if definite_hits else
+                    "UNVERIFIABLE" if hits or not recognized else "CLEAN")
     if start["game"] != end["game"] or start["harness"] != end["harness"]: outcome = "GAME_MODIFIED_DURING_RUN"
     elif protocol_error: outcome = "ERROR"
-    elif hits: outcome = "BLINDNESS_VIOLATED"
-    elif not recognized: outcome = "AUDIT_UNVERIFIABLE"
+    elif definite_hits: outcome = "BLINDNESS_VIOLATED"
+    elif hits or not recognized: outcome = "AUDIT_UNVERIFIABLE"
     elif timed_out or stop_reason in {"child_exit_error", "premature_exit", "ipc_error"}: outcome = "INCOMPLETE_DISPATCH"
     elif stop_reason not in {"won", "dead", "cap", "no_progress", "player_stop"}: outcome = "INCOMPLETE_DISPATCH"
     elif child.returncode != 0 and not (controller_stop and controller_killed and child.returncode == -signal.SIGKILL): outcome = "INCOMPLETE_DISPATCH"

@@ -90,6 +90,20 @@ class GolemRunnerTests(unittest.TestCase):
         replies = shared / "replies"
         replies.mkdir()
         self.assertTrue(audit_commands([{"command": f"cat {replies}/0001.json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": "cat ../replies/0001.json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": "cd .. && cat replies/0001.json"}], capsule, session))
+        self.assertFalse(audit_commands([{"command": "cat ./inbox/0001.json"}], capsule, session))
+        # A fully resolved path outside protected roots is allowed, even with
+        # parent traversal; the auditor is protecting controller/repo evidence.
+        self.assertFalse(audit_commands([{"command": "cat ../../etc/hostname"}], capsule, session))
+        with patch.dict(os.environ, {"HOME": str(self.base / "home")}):
+            self.assertFalse(audit_commands([{"command": "cat $HOME/hostname"}], capsule, session))
+            self.assertFalse(audit_commands([{"command": "cat ~/hostname"}], capsule, session))
+        unresolved = audit_commands([{"command": "cat ../$AREA/replies/*.json"}], capsule, session)
+        self.assertTrue(unresolved)
+        self.assertTrue(all(hit.get("reason") == "UNRESOLVED_PATH" for hit in unresolved))
+        self.assertTrue(audit_commands([{"command": "cat ../replies/$(printf 0001).json"}], capsule, session))
+        self.assertTrue(audit_commands([{"command": "pushd ../replies"}], capsule, session))
         self.assertTrue(audit_commands([{"command": f"./playctl step reads {replies}/0001.json"}], capsule, session))
         self.assertTrue(audit_commands([{"command": f"./playctl step '[\"look\"]'; cat {replies}/0001.json"}], capsule, session))
         self.assertTrue(audit_commands([{"command": f"./playctl step '[\"look\"]'\ncat {replies}/0001.json"}], capsule, session))
@@ -102,6 +116,10 @@ class GolemRunnerTests(unittest.TestCase):
         events.write_text(json.dumps(hit[0]) + "\n")
         _, _, receipt = self.run_fake("pass\n", event_log=events)
         self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
+        events.write_text(json.dumps({"type": "command", "command": "cat ../$AREA/replies/*.json"}) + "\n")
+        _, _, receipt = self.run_fake("pass\n", event_log=events)
+        self.assertEqual(receipt["audit_status"], "UNVERIFIABLE")
+        self.assertEqual(receipt["run_outcome"], "AUDIT_UNVERIFIABLE")
 
     def test_compound_playctl_then_reply_read_is_audited(self):
         reply = self.base / f"run-{type(self).runs + 1}" / "replies" / "0001.json"
@@ -116,6 +134,22 @@ class GolemRunnerTests(unittest.TestCase):
             subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
             ''', cap=1)
         self.assertIn('"request_id": "0001"', (run / "stdout.log").read_text())
+        self.assertEqual(receipt["audit_status"], "VIOLATED")
+        self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
+
+    def test_relative_reply_read_is_audited_from_capsule_cwd(self):
+        reply = self.base / f"run-{type(self).runs + 1}" / "replies" / "0001.json"
+        _, run, receipt = self.run_fake(f'''
+            import json, shlex, subprocess
+            from pathlib import Path
+            reply = Path({str(reply)!r})
+            command = "./playctl step " + shlex.quote(json.dumps(["look"])) + "; cat ../replies/0001.json"
+            print(json.dumps({{"type":"command", "command":command}}), flush=True)
+            subprocess.run(command, shell=True)
+            note = {{"turn_id":1,"wanted":"advance","surprise":"","continue":1,"reason":"test","unsupported_intent":None}}
+            subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+            ''', cap=1)
+        self.assertTrue(reply.exists())
         self.assertEqual(receipt["audit_status"], "VIOLATED")
         self.assertEqual(receipt["run_outcome"], "BLINDNESS_VIOLATED")
 
@@ -298,6 +332,27 @@ class GolemRunnerTests(unittest.TestCase):
             note = {"turn_id":1,"wanted":"advance","surprise":"","continue":1,"reason":"final ack","unsupported_intent":None}
             subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
             ''', cap=1, final_ack_grace=1.0)
+        self.assertEqual(receipt["stop_reason"], "cap")
+        self.assertEqual(receipt["run_outcome"], "COMPLETE")
+        self.assertTrue(receipt["journal_consistent"])
+        self.assertEqual(receipt["journal_record_count"], 1)
+
+    def test_final_ack_written_during_reply_publication_window_completes_dispatch(self):
+        from playtest import golem_runner
+        publish = golem_runner._controller_reply
+        def delayed_publish(path, value):
+            publish(path, value)
+            if value.get("terminated") == "cap":
+                # Let playctl return to its caller and journal before the
+                # controller resumes from reply publication.
+                time.sleep(.2)
+        with patch.object(golem_runner, "_controller_reply", side_effect=delayed_publish):
+            _, _, receipt = self.run_fake('''
+                import json, shlex, subprocess
+                subprocess.run("./playctl step " + shlex.quote(json.dumps(["attack"])), shell=True)
+                note = {"turn_id":1,"wanted":"advance","surprise":"after reply","continue":1,"reason":"final ack","unsupported_intent":None}
+                subprocess.run("./playctl journal " + shlex.quote(json.dumps(note)), shell=True)
+                ''', cap=1, final_ack_grace=1.0)
         self.assertEqual(receipt["stop_reason"], "cap")
         self.assertEqual(receipt["run_outcome"], "COMPLETE")
         self.assertTrue(receipt["journal_consistent"])

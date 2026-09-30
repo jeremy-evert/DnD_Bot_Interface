@@ -41,6 +41,12 @@ class DelveRenderTests(unittest.TestCase):
         for obj, name in zip(cls.data["rooms"][0]["objects"], ("Bell", "chart", "dome")):
             obj["name"] = name
         cls.data["rooms"][1]["objects"].append({"id":"ring","name":"brass ring","zone":"near","reader":{"on":"look","event_key":"object.read","effects":[]}})
+        # Ivy Amendment 5: the status mockup marks a visible takeable object with (get).
+        cls.data["rooms"][0]["objects"][1]["item_id"] = "chart_copy"
+        cls.data["items"].append({"id":"chart_copy","name":"star chart",
+                                  "reader":{"on":"use","event_key":"object.read","effects":[]}})
+        for key in ('get.blocked','get.not_takeable','use.nothing'):
+            cls.data["bank"]["entries"].append({"key":key,"fact_slots":[],"variants":[],"fallback":"Nothing."})
         cls.pack = load_pack(cls.data)
 
     def test_determinism_seed_variance_and_no_repeat(self):
@@ -141,7 +147,7 @@ class DelveRenderTests(unittest.TestCase):
         state.clocks["patrol"] = 2
         self.assertEqual(render_status(state,self.pack),
             "MOSSY ENTRY [near]  HP 24/24  PATROL [##..]  Exits: E\n"
-            "Rain taps the cracked stone.\nObjects: Bell [near]; chart [far]; dome [doorway].")
+            "Rain taps the cracked stone.\nObjects: Bell [near]; chart [far] (get); dome [doorway].")
         state.room_id = "vault"
         state.player.update(hp=17, zone="doorway")
         state.clocks["patrol"] = 3

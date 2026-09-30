@@ -490,6 +490,7 @@
     {
       "id": "brass_ring",
       "name": "brass ring",
+      "consumed_on_use": true,
       "reader": {
         "on": "use",
         "event_key": "item.use.ring",
@@ -748,12 +749,12 @@
         ],
         "variants": [
           "{{enemy_name}}: forearms locked, chin down. A thrown silver leaf opens that.",
-          "{{enemy_name}}: turtled behind both arms. Bracing is wasted; throw something silver.",
-          "{{enemy_name}}: a wall of knuckles. Don’t push it. Distract it.",
-          "{{enemy_name}}: guard up, patient as masonry. Silver in his eyes breaks it.",
-          "{{enemy_name}}: waiting behind his guard for you to waste a turn.",
-          "{{enemy_name}}: all elbows and patience. Shoves bounce; attacks strain.",
-          "{{enemy_name}}: pure defense this turn. Attack at a cost, or throw the leaf."
+          "{{enemy_name}}: turtled behind both arms. Bracing is wasted; throw the silver leaf.",
+          "{{enemy_name}}: a wall of knuckles. Don’t push it; a thrown silver leaf may distract him.",
+          "{{enemy_name}}: guard up, patient as masonry. Throw the silver leaf into his sight.",
+          "{{enemy_name}}: waiting behind his guard for you to waste a turn. The silver leaf can draw his eyes.",
+          "{{enemy_name}}: all elbows and patience. Shoves bounce; a thrown silver leaf breaks his focus.",
+          "{{enemy_name}}: pure defense this turn. Attack at a cost, or throw the silver leaf."
         ],
         "fallback": "{{enemy_name}}: forearms locked, chin down. A thrown silver leaf opens that."
       },
@@ -1192,6 +1193,20 @@
           "Brace heavy blows, shove swings and grabs, throw silver at a closed guard. Every move feeds the patrol."
         ],
         "fallback": "Move n/s/e/w. Look with x, take with g, use with u, throw with t. In a fight: a, sh, b."
+      },
+      {
+        "key": "target.not_held",
+        "fact_slots": [
+          "target"
+        ],
+        "variants": [
+          "You see {{target}} here, but it is not in hand. Take it with get {{target}}.",
+          "{{target}} is here, just out of hand. Use get {{target}} to take it.",
+          "There is {{target}}, not in your hand. Take {{target}} with get {{target}}.",
+          "{{target}} is on the ground and not yours yet. Try get {{target}}.",
+          "You can see {{target}} nearby. Pick it up with get {{target}}."
+        ],
+        "fallback": "You see {{target}} here, but it is not in hand. Take it with get {{target}}."
       },
       {
         "key": "terminal.quit",

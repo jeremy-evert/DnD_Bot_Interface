@@ -1,8 +1,8 @@
 <!-- Binding interface spec for Fast Delve M1, authored by Terra/Penny (plan terra-fast-delve-01), approved by Ivy 2026-09-29. Quality yardstick: docs/QUALITY_VISION.md -->
 # Fast Delve M1 — Binding Interface Spec
 
-`spec_id`: `terra-fast-delve-01-m1-binding`  
-`status`: binding for all M1 builders  
+`spec_id`: `terra-fast-delve-01-m1-binding`
+`status`: binding for all M1 builders
 `scope`: new `delve/` only; `dnd_combat/` remains frozen at `94af79a`.
 
 Python owns all state. Packs are untrusted data. No live LLM calls, GUI, networking, persistence, accounts, or `dnd_combat` changes.
@@ -281,7 +281,7 @@ Top-of-turn exploration:
 ```text
 MOSSY ENTRY [near]  HP 24/24  PATROL [##..]  Exits: E
 Rain taps the cracked stone. Bell [near]; chart [far]; dome [doorway].
-> 
+>
 ```
 
 Top-of-turn combat:
@@ -290,7 +290,7 @@ Top-of-turn combat:
 HOLLOW VAULT [doorway]  HP 17/24  PATROL [###.]  Exits: W
 Hobgoblin Captain 18/18 HP [doorway] — SMASH: brace to negate; shove at doorway to drop the dome.
 Hazard: COLLAPSE [hazard].  Objects: brass ring [near].
-> 
+>
 ```
 
 Every hit/miss receives its own banked line and margin: `Your blade skids off the pauldron (miss by 3).` Never collapse combat into generic “you attack.”

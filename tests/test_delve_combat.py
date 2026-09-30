@@ -132,6 +132,81 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(nothing[0].key, 'use.nothing')
         self.assertIn('vault_token', self.s.inventory)
 
+    def test_named_enemy_target_selects_that_living_enemy(self):
+        data=copy.deepcopy(EXAMPLE)
+        second=copy.deepcopy(data['enemies'][0])
+        second.update(id='goblin_two', name='Goblin Two', start_zone='far')
+        second['intent_cycle']=['smash']
+        second['intents']=[copy.deepcopy(second['intents'][0])]
+        second['intents'][0].update(id='smash', type='strike', telegraph_key='intent.goblin.two')
+        data['enemies'].append(second)
+        data['bank']['entries'].append({'key':'intent.goblin.two','fact_slots':['enemy_name'],
+                                        'variants':['{{enemy_name}} waits.'],'fallback':'{{enemy_name}} waits.'})
+        pack=load_pack(data); state=DelveState.new(pack,4,'fighter')
+        state.room_id='vault'; state.player['zone']='doorway'
+        engine=Engine(pack,state); state.rng=ScriptedRandom([20,1,1,1])
+        captain_before=state.enemies['captain']['hp']
+        other_before=state.enemies['goblin_two']['hp']
+        events=engine.apply(Action('attack','goblin_two'))
+        self.assertEqual(state.enemies['captain']['hp'],captain_before)
+        self.assertLess(state.enemies['goblin_two']['hp'],other_before)
+        self.assertIn('attack.hit',[event.key for event in events])
+        shoved=engine.apply(Action('shove','goblin_two'))
+        self.assertEqual(state.enemies['goblin_two']['zone'],'far')
+        self.assertEqual(state.enemies['captain']['zone'],'doorway')
+        self.assertIn('shove.success',[event.key for event in shoved])
+
+    def test_throw_at_cancels_only_the_named_enemy_intent(self):
+        data=copy.deepcopy(EXAMPLE)
+        second=copy.deepcopy(data['enemies'][0])
+        second.update(id='goblin_two', name='Goblin Two', start_zone='far')
+        second['intent_cycle']=['smash']
+        second['intents']=[copy.deepcopy(second['intents'][0])]
+        second['intents'][0].update(id='smash', type='strike', telegraph_key='intent.goblin.two')
+        data['enemies'].append(second)
+        data['items'].append({'id':'silver_leaf','name':'silver leaf','reader':
+                              {'on':'throw','event_key':'object.read','effects':[]},
+                              'throw_tags':['interrupt_strike']})
+        data['bank']['entries'].append({'key':'intent.goblin.two','fact_slots':['enemy_name'],
+                                        'variants':['{{enemy_name}} waits.'],'fallback':'{{enemy_name}} waits.'})
+        pack=load_pack(data); state=DelveState.new(pack,4,'fighter')
+        state.room_id='vault'; state.player['zone']='doorway'; state.inventory.append('silver_leaf')
+        engine=Engine(pack,state); state.enemies['goblin_two']['current_intent_id']='smash'
+        captain_intent=state.enemies['captain']['current_intent_id']
+        events=engine.apply(Action('throw','silver_leaf',enemy_target_id='goblin_two'))
+        cancelled=next(event for event in events if event.key=='intent.cancelled')
+        self.assertEqual(cancelled.fact_slots['enemy_name'],'Goblin Two')
+        self.assertEqual(state.enemies['captain']['current_intent_id'],captain_intent)
+
+    def test_unknown_enemy_target_is_explanatory_and_draw_free(self):
+        for target, room in (('absent_enemy','vault'), ('captain','entry'), ('captain','vault')):
+            self.s.room_id=room
+            if target=='captain' and room=='vault': self.s.enemies['captain']['hp']=0
+            before=copy.deepcopy(self.s.snapshot()); draws=self.s.rng_draws
+            events=self.e.apply(Action('attack',target))
+            self.assertEqual([event.key for event in events],['target.unknown'])
+            after=self.s.snapshot()
+            for key in ('turn','rng_draws','player','room_id','inventory','enemies','clocks','flags'):
+                self.assertEqual(after[key],before[key],key)
+            self.assertEqual(self.s.rng_draws,draws)
+
+    def test_unknown_shove_and_throw_at_targets_are_draw_free(self):
+        self.s.room_id='vault'; self.s.inventory.append('ration')
+        cases=(Action('shove','absent_enemy'),
+               Action('shove','captain'),
+               Action('throw','ration',enemy_target_id='absent_enemy'),
+               Action('throw','ration',enemy_target_id='captain'))
+        # The final two actions exercise both unknown and dead named enemies.
+        for action in cases:
+            if action.target_id=='captain' or action.enemy_target_id=='captain':
+                self.s.enemies['captain']['hp']=0
+            before=copy.deepcopy(self.s.snapshot())
+            events=self.e.apply(action)
+            self.assertEqual([event.key for event in events],['target.unknown'])
+            after=self.s.snapshot()
+            for key in ('turn','rng_draws','player','room_id','inventory','enemies','clocks','flags'):
+                self.assertEqual(after[key],before[key],key)
+
     def test_natural_one_miss_margin_is_at_least_one_when_total_meets_ac(self):
         self.declare('strike')
         self.s.player['attack_bonus'] = self.e._living_enemy().stats.armor_class - 1

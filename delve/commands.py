@@ -12,6 +12,11 @@ class ParseProblem:
     text: str = ""
 
 
+@dataclass(frozen=True)
+class EnemyInspection:
+    enemy_id: str
+
+
 # This table is the parser vocabulary and the source rendered by `?`.
 # Each entry is (canonical action, accepted spellings, help label).
 COMMANDS = (
@@ -94,6 +99,20 @@ def _held_items(state, pack):
     return candidates
 
 
+def _takeable_item_problem(query, state, pack):
+    room = _room(state, pack)
+    by_item = {item.id: item for item in pack.items}
+    candidates = [(obj.item_id, by_item[obj.item_id].name)
+                  for obj in room.objects
+                  if obj.id in state.present_objects[state.room_id]
+                  and obj.item_id and obj.item_id in by_item]
+    ident, problem = _resolve(query, candidates, "takeable item")
+    if problem is None:
+        item = by_item[ident]
+        return ParseProblem("target.not_held", {"target": item.name})
+    return None
+
+
 def _hazard_problem(query, state, pack):
     hazards = [h for h in pack.hazards if h.room_id == state.room_id]
     normalized = query.casefold().strip()
@@ -102,9 +121,13 @@ def _hazard_problem(query, state, pack):
         if hazard.tag == "collapse":
             names.update(("ceiling", "arch", "collapse", "hazard"))
         if normalized in names or any(word.startswith(normalized) for name in names for word in name.split()):
-            what = "a falling ceiling collapse" if hazard.tag == "collapse" else f"a {hazard.tag.replace('_', ' ')} hazard"
-            return ParseProblem("hazard.inspect", {"hazard_name": hazard.tag},
-                                f"This room has {what}. You can shove an enemy into it.")
+            if hazard.tag == "collapse":
+                text = "This room has a falling ceiling collapse. You can shove an enemy into it."
+            elif hazard.tag == "fire":
+                text = "This room has a fire hazard. It burns when you enter."
+            else:
+                text = f"This room has a {hazard.tag.replace('_', ' ')} hazard."
+            return ParseProblem("hazard.inspect", {"hazard_name": hazard.tag}, text)
     return None
 
 
@@ -168,7 +191,12 @@ def parse_command(line, state, pack):
         query = " ".join(rest)
         ident, problem = _resolve(query, _objects(state, pack), "object")
         if problem and first in ("look", "x", "examine", "inspect", "read", "check", "study"):
-            return _hazard_problem(query, state, pack) or problem
+            problem = _hazard_problem(query, state, pack) or problem
+            if problem.message_key == "target.unknown":
+                enemy_id, enemy_problem = _resolve(query, _enemies(state, pack), "enemy")
+                if enemy_problem is None: return EnemyInspection(enemy_id)
+                if enemy_problem.message_key == "target.ambiguous": return enemy_problem
+            return problem
         return problem or Action("look", ident)
 
     if action == "inventory" and not rest:
@@ -190,22 +218,36 @@ def parse_command(line, state, pack):
 
     if action == "throw":
         item_text = rest
+        enemy_target_id = None
         if "at" in rest:
             at = rest.index("at")
             if at == 0 or at == len(rest) - 1:
                 return ParseProblem("target.unknown", {"target": " ".join(rest[at + 1:])})
             item_text = rest[:at]
-            _, problem = _resolve(" ".join(rest[at + 1:]), _enemies(state, pack), "enemy")
+            enemy_target_id, problem = _resolve(" ".join(rest[at + 1:]), _enemies(state, pack), "enemy")
             if problem:
                 return problem
         ident, problem = _resolve(" ".join(item_text), _held_items(state, pack), "held item")
-        return problem or Action("throw", ident)
+        if problem:
+            return _takeable_item_problem(" ".join(item_text), state, pack) or problem
+        return Action("throw", ident, enemy_target_id=enemy_target_id)
 
     if action == "use":
         if not rest:
             return ParseProblem("target.unknown", {"target": ""})
         result, problem = _split_item_target(rest, state, pack, allow_reverse=first in ("give", "hand", "show", "offer", "present", "put"))
-        return problem or Action("use", result[0])
+        if problem:
+            query = " ".join(rest)
+            for index, word in enumerate(rest):
+                if word in _PREPOSITIONS:
+                    query = " ".join(rest[:index]); break
+            not_held = _takeable_item_problem(query, state, pack)
+            if not_held: return not_held
+            # Known consumed or otherwise absent items reach the engine's use.nothing line.
+            known, known_problem = _resolve(query, [(i.id, i.name) for i in pack.items], "item")
+            if known_problem is None and known not in state.inventory: return Action("use", known)
+            return problem
+        return Action("use", result[0])
 
     if action == "get":
         if not rest:

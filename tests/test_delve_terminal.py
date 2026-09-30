@@ -3,6 +3,7 @@ import json
 import random
 import re
 import socket
+import tempfile
 import time
 import unittest
 from io import StringIO
@@ -10,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from delve import __main__ as terminal
-from delve.commands import COMMANDS, HELP_FORMS, EnemyInspection, ParseProblem, parse_command
+from delve.commands import COMMANDS, HELP_FORMS, EnemyInspection, HeldInspection, ParseProblem, parse_command
 from delve.engine import Action, Engine
 from delve.pack import load_engine_ready_pack, load_pack
 from delve.render import RenderMemory, render_event, render_status
@@ -45,6 +46,53 @@ class DelveTerminalTests(unittest.TestCase):
         bank = {entry.key: entry for entry in self.pack.bank}
         for key in ('clue.mira', 'clue.dome', 'clue.chart'):
             self.assertTrue(any(line in output for line in bank[key].variants), key)
+
+    def test_golem_journal_inputs_are_helpful_in_the_real_terminal(self):
+        actions = ["", *(["attack"] * 6), "get brass ring", "x brass ring",
+                   "east", "south", "use brass ring on Mira", "q"]
+        _, output = self.play(actions, seed=1)
+        self.assertIn("brass ring", output.casefold())
+        self.assertIn("mira", output.casefold())
+
+        _, output = self.play(["", "sh goblin into moon", "flee", "q"], seed=1)
+        self.assertIn("moon", output.casefold())
+        self.assertIn("brace", output.casefold())
+        self.assertIn("doorway", output.casefold())
+
+        pack_data = json.loads(PACK_PATH.read_text())
+        pack_data["start_room_id"] = "hollow_vault"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_pack = Path(temp_dir) / "captain.json"
+            custom_pack.write_text(json.dumps(pack_data))
+            _, output = self.play(["", "sh captain collapse", "q"], seed=1,
+                                  extra_args=("--pack", str(custom_pack)))
+        self.assertIn("captain", output.casefold())
+
+    def test_held_inspection_use_target_and_shove_clause_parse(self):
+        state = DelveState.new(self.pack, 1, "fighter")
+        state.inventory.append("brass_ring")
+        state.present_objects[state.room_id].remove("brass_ring_obj")
+        inspected = parse_command("x brass ring", state, self.pack)
+        self.assertEqual(inspected, HeldInspection("brass_ring"))
+        state.room_id = "mira_gallery"
+        self.assertEqual(parse_command("use brass ring on Mira", state, self.pack),
+                         Action("use", "brass_ring"))
+        self.assertEqual(parse_command("use brass ring on moon", state, self.pack).message_key,
+                         "target.unknown")
+        state.room_id = "hollow_vault"
+        self.assertEqual(parse_command("sh captain collapse", state, self.pack).verb, "shove")
+        state.room_id = "mossy_entry"
+        self.assertEqual(parse_command("sh goblin into moon", state, self.pack).message_key,
+                         "target.unknown")
+        state.room_id = "hollow_vault"
+        self.assertEqual(parse_command("sh captain toward ceiling", state, self.pack).verb, "shove")
+
+    def test_new_terminal_bank_keys_have_four_drift_variants(self):
+        bank = {entry.key: entry for entry in self.pack.bank}
+        self.assertEqual(set(bank["look.held"].fact_slots), {"item_name"})
+        for key in ("look.held", "retreat.help"):
+            with self.subTest(key=key):
+                self.assertGreaterEqual(len(bank[key].variants), 4)
 
     def test_patrol_four_line_precedes_lower_hp_status(self):
         actions = [''] + ['attack'] * 6 + ['east', 'east', 'west', 'east', 'q']

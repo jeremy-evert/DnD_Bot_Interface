@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 import time
 
-from .commands import EnemyInspection, HELP_FORMS, ParseProblem, parse_command
+from .commands import EnemyInspection, HeldInspection, HELP_FORMS, ParseProblem, parse_command
 from .engine import Engine
 from .pack import load_engine_ready_pack
 from .render import RenderMemory, render_death, render_event, render_help, render_status, render_victory
@@ -85,6 +85,18 @@ def main(argv=None):
                         intent_text = intent_text[len(prefix):].strip()
                 _print(f"{enemy.name} {runtime['hp']}/{enemy.stats.hp} HP "
                       f"[{runtime.get('zone', enemy.start_zone)}] — {intent_text or 'no declared intent'}")
+                continue
+            if isinstance(parsed, HeldInspection):
+                item = next(i for i in pack.items if i.id == parsed.item_id)
+                linked = next(((obj, obj.reader) for room in pack.rooms for obj in room.objects
+                               if obj.item_id == item.id and obj.reader and obj.reader.on == "look"), None)
+                if linked:
+                    obj, reader = linked
+                    _print(render_event({"key": reader.event_key,
+                                         "fact_slots": {"object_name": obj.name}}, pack, seed, memory))
+                else:
+                    _print(render_event({"key": "look.held", "fact_slots": {"item_name": item.name}},
+                                        pack, seed, memory))
                 continue
             if isinstance(parsed, ParseProblem):
                 if parsed.text:

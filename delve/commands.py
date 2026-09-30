@@ -22,6 +22,11 @@ class EnemyInspection:
     enemy_id: str
 
 
+@dataclass(frozen=True)
+class HeldInspection:
+    item_id: str
+
+
 # This table is the parser vocabulary and the source rendered by `?`.
 # Each entry is (canonical action, accepted spellings, help label).
 COMMANDS = (
@@ -196,6 +201,10 @@ def parse_command(line, state, pack):
             return Action("look")
         query = " ".join(rest)
         ident, problem = _resolve(query, _objects(state, pack), "object")
+        if problem and problem.message_key == "target.unknown":
+            held_id, held_problem = _resolve(query, _held_items(state, pack), "held item")
+            if held_problem is None and held_id in state.inventory:
+                return HeldInspection(held_id)
         if problem and first in ("look", "x", "examine", "inspect", "read", "check", "study"):
             problem = _hazard_problem(query, state, pack) or problem
             if problem.message_key == "target.unknown":
@@ -216,6 +225,32 @@ def parse_command(line, state, pack):
         if not rest:
             return Action(action)
         foes = _enemies(state, pack)
+        if action == "shove":
+            if not any(word in ("into", "toward", "at") for word in rest):
+                for split in range(1, len(rest)):
+                    foe_id, foe_problem = _resolve(" ".join(rest[:split]), foes, "enemy")
+                    if foe_problem:
+                        continue
+                    hint = " ".join(rest[split:])
+                    _, object_problem = _resolve(hint, _objects(state, pack), "object")
+                    hazard_hint = _hazard_problem(hint, state, pack) if object_problem else None
+                    if object_problem and (hazard_hint is None or hazard_hint.message_key != "hazard.inspect"):
+                        return object_problem
+                    return Action("shove", foe_id)
+            for index, word in enumerate(rest):
+                if word in ("into", "toward", "at"):
+                    if index == 0:
+                        return ParseProblem("target.unknown", {"target": " ".join(rest[index + 1:])})
+                    hint = " ".join(rest[index + 1:])
+                    if not hint:
+                        return ParseProblem("target.unknown", {"target": hint})
+                    target_id, target_problem = _resolve(hint, _objects(state, pack), "object")
+                    if target_problem:
+                        hazard_hint = _hazard_problem(hint, state, pack)
+                        if hazard_hint is None or hazard_hint.message_key != "hazard.inspect":
+                            return target_problem
+                    rest = rest[:index]
+                    break
         ident, problem = _resolve(" ".join(rest), foes, "enemy")
         return problem or Action(action, ident)
 
@@ -241,7 +276,7 @@ def parse_command(line, state, pack):
     if action == "use":
         if not rest:
             return ParseProblem("target.unknown", {"target": ""})
-        result, problem = _split_item_target(rest, state, pack, allow_reverse=first in ("give", "hand", "show", "offer", "present", "put"))
+        result, problem = _split_item_target(rest, state, pack, allow_reverse=True)
         if problem:
             query = " ".join(rest)
             for index, word in enumerate(rest):
@@ -261,6 +296,8 @@ def parse_command(line, state, pack):
         ident, problem = _resolve(" ".join(rest), _objects(state, pack), "object")
         return problem or Action("get", ident)
 
-    if first in ("ret", "retreat", "flee") and len(rest) == 1 and rest[0] in _DIRECTIONS:
+    if first in ("ret", "retreat", "flee", "leave") and not rest:
+        return ParseProblem("retreat.help", {})
+    if first in ("ret", "retreat", "flee", "leave") and len(rest) == 1 and rest[0] in _DIRECTIONS:
         return Action("retreat", direction=_DIRECTIONS[rest[0]])
     return ParseProblem("parse.unknown_verb", {"verb": first})

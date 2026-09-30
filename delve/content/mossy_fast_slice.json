@@ -1326,6 +1326,28 @@
         "fallback": "No retreat from here. You need the doorway and an open way back."
       },
       {
+        "key": "look.held",
+        "fact_slots": ["item_name"],
+        "variants": [
+          "The {{item_name}} rests in your hand, its weight familiar now.",
+          "You turn the {{item_name}} over. Nothing new catches your eye.",
+          "The {{item_name}} bears the marks of its last owner.",
+          "A closer look at the {{item_name}} finds only scratches and age."
+        ],
+        "fallback": "You inspect the {{item_name}} in your hand."
+      },
+      {
+        "key": "retreat.help",
+        "fact_slots": [],
+        "variants": [
+          "A living foe holds this ground. Brace, shove, or throw to make room; reach the doorway zone, then retreat with a direction.",
+          "You cannot simply leave while an enemy blocks you. Brace, shove, or throw, then reach the doorway and name an exit direction.",
+          "The fight has no free exit. Brace, shove, or throw for an opening; from the doorway zone, retreat north, south, east, or west.",
+          "An enemy is still here. Try bracing, shoving, or throwing; once at the doorway, retreat with a direction."
+        ],
+        "fallback": "An enemy blocks you. Brace, shove, or throw, or reach the doorway zone and retreat with a direction."
+      },
+      {
         "key": "terminal.closed",
         "fact_slots": [],
         "variants": [

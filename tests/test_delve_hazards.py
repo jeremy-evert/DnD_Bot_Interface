@@ -20,6 +20,8 @@ class ScriptedRandom(random.Random):
 
 def make_pack():
     d = copy.deepcopy(EXAMPLE)
+    # Victory is caused by defeating the Captain; route knowledge only enables the hazard.
+    d['terminals'][0]['all'] = [p for p in d['terminals'][0]['all'] if p['kind'] != 'fact_known']
     # Amendment 3 point 5/6 event contract; use a single bank entry per engine event.
     keys = {x['key'] for x in d['bank']['entries']}
     for key in ('shove.success', 'shove.fail', 'throw.interrupt', 'throw.fizzle', 'intent.cancelled', 'hazard.trigger', 'enemy.hit', 'enemy.miss', 'attack.hit', 'attack.miss', 'brace.success', 'brace.wasted', 'combat.not_yet'):
@@ -210,7 +212,6 @@ class HazardTests(unittest.TestCase):
 
     def test_hazard_kill_emits_enemy_defeated_before_victory(self):
         self.s.flags.add('captain_route_known')
-        self.s.known_facts.append('captain_route')
         self.s.enemies['captain']['hp'] = 6
         self.s.enemies['captain']['current_intent_id'] = 'smash'
         events = self.act('shove', 'captain')

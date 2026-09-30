@@ -40,6 +40,8 @@ def assert_telegraph_invariant(testcase, event_log):
 
 def combat_pack():
     data = copy.deepcopy(EXAMPLE)
+    # Shipped M1 victory is outcome-based; clue knowledge remains a route payoff.
+    data['terminals'][0]['all'] = [p for p in data['terminals'][0]['all'] if p['kind'] != 'fact_known']
     entries = data['bank']['entries']
     keys = {entry['key'] for entry in entries}
     for key, slots in [
@@ -216,7 +218,7 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(event.fact_slots['margin'], 1)
 
     def test_attack_kill_emits_defeated_before_victory(self):
-        self.s.known_facts.append('captain_route')
+        # Victory follows the Captain's defeat; route knowledge is not required.
         self.s.enemies['captain']['hp'] = 1
         self.declare('strike')
         self.scripted(20, 1, 1, 1)
@@ -321,17 +323,15 @@ class CombatTests(unittest.TestCase):
         death=next(event for event in events if event.key=='terminal.death')
         self.assertEqual(death.fact_slots, {'cause':'your wounds','cause_enemy':'','cause_intent':''})
 
-    def test_victory_predicate_both_orders(self):
-        # Enemy dies before the fact becomes known.
+    def test_victory_depends_on_enemy_death_with_or_without_fact(self):
+        # Route knowledge remains optional when the Captain is defeated.
         self.declare('guard'); self.s.enemies['captain']['hp'] = 1
         self.scripted(20, 1, 1, 1)
-        self.act('attack')
+        events = self.act('attack')
         self.assertEqual(self.s.enemies['captain']['hp'], 0)
-        self.assertEqual(self.s.terminal, 'playing')
-        self.s.known_facts.append('captain_route')
-        self.act('help')
         self.assertEqual(self.s.terminal, 'victory')
-        # Fact known before the enemy dies.
+        self.assertIn('terminal.victory', [event.key for event in events])
+        # Knowing the route before defeat still produces the same outcome.
         other = self.__class__(); other.setUp()
         other.s.known_facts.append('captain_route'); other.declare('strike')
         other.s.enemies['captain']['hp'] = 1; other.scripted(20, 1, 1, 1)
@@ -339,14 +339,12 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(other.s.terminal, 'victory')
         self.assertIn('terminal.victory', [e.key for e in events])
 
-    def test_enemy_death_clears_intent_and_frees_move_and_get(self):
+    def test_enemy_death_clears_intent_and_ends_run(self):
         self.declare('guard'); self.s.enemies['captain']['hp'] = 1
         self.scripted(20, 1, 1, 1)
         self.act('attack')
         self.assertIsNone(self.s.enemies['captain']['current_intent_id'])
-        # Drop a takeable object into the now unoccupied room to cover get.
-        self.assertEqual(self.act('get', 'vault_token_obj')[0].key, 'item.get')
-        self.assertEqual(self.act('move', direction='west')[0].key, 'room.return')
+        self.assertEqual(self.s.terminal, 'victory')
 
     def test_retreat_only_doorway_ungated_clock_and_preserves_enemy_intent(self):
         self.declare('strike')

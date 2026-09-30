@@ -32,7 +32,7 @@ def _evidence_sha(records, turn_ids):
     return _sha(canonical_json(selected).encode("utf-8"))
 
 
-def _normalize_detectors(records, instances, run_dir):
+def _normalize_detectors(records, instances, run_dir, detector_version=DETECTOR_VERSION, extra_probes=()):
     normalized = []
     probe_artifacts = []
     for item in instances:
@@ -47,8 +47,8 @@ def _normalize_detectors(records, instances, run_dir):
         normalized.append(normalize_instance(source="detector", mode=item["mode"], turn_ids=turns,
             quote=item.get("quote", ""), rationale=item.get("rationale", ""), evidence_kind=kind,
             evidence_sha256=evidence_sha))
-    probe_artifact = {"schema_version": 1, "detector_version": DETECTOR_VERSION,
-                      "probes": probe_artifacts}
+    probe_artifact = {"schema_version": 1, "detector_version": detector_version,
+                      "probes": probe_artifacts + [dict(item) for item in extra_probes]}
     probe_path = Path(run_dir) / "static_probe_evidence.json"
     probe_path.write_text(canonical_json(probe_artifact) + "\n", encoding="utf-8")
     recorded = {_sha(canonical_json(artifact).encode("utf-8")) for artifact in probe_artifact["probes"]}
@@ -123,12 +123,15 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
     actual_head = records[-1]["chain_hash"] if records else None
     outcome = receipt["run_outcome"]
     game_id = manifest.get("game_id", "dnd_combat")
-    detector_result = run_all(records, journal, game_id=game_id)
+    detector_result = run_all(records, journal, game_id=game_id, receipt=receipt)
     detector_set_status = "IMPLEMENTED" if isinstance(detector_result, list) else detector_result["status"]
     instances = detector_result if isinstance(detector_result, list) else detector_result["instances"]
     detector_notes = list(getattr(detector_result, "notes", ()))
     verify_instance_quotes(records, instances)
-    normalized = _normalize_detectors(records, instances, run_dir)
+    from .detectors_delve import DETECTOR_VERSION_DELVE, curiosity_events_delve, session_facts_delve
+    detector_version = DETECTOR_VERSION_DELVE if game_id == "delve" else DETECTOR_VERSION
+    normalized = _normalize_detectors(records, instances, run_dir, detector_version,
+                                      getattr(detector_result, "probe_artifacts", ()))
     judge_instances, judge_status = None, "NOT_REQUESTED"
     judge_hash, judge_version = None, None
     verifier_version = judge_model = judge_effort = None
@@ -184,13 +187,13 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
     for j in journal:
         intent = " ".join((j["wanted"], j["unsupported_intent"] or "")).casefold()
         touched.update(name for name in object_names if name.casefold() in intent)
-    facts = session_facts(records)
+    facts = session_facts_delve(records) if game_id == "delve" else session_facts(records)
     facts["objects_touched"] = len(touched); facts["encounters_faced"] = len(encounters)
     return make_entry(run_id=manifest["run_id"], session_id=manifest["session_id"],
         manifest_sha256=manifest["manifest_sha256"], run_receipt_sha256=_sha(receipt_data),
         journal_sha256=receipt["journal_sha256"], game_revision=manifest["game_revision"],
         harness_revision=manifest["harness_revision"], game_sha=manifest["game_sha"], harness_sha=manifest["harness_sha"],
-        detector_version=DETECTOR_VERSION, persona_id=manifest["persona_id"],
+        detector_version=detector_version, persona_id=manifest["persona_id"],
         persona_prompt_sha256=manifest["persona_prompt_sha256"], seed=manifest["seed"],
         is_holdout=manifest["is_holdout"], holdout_prompt_sha256=manifest["holdout_prompt_sha256"],
         narrator_policy=manifest["narrator_policy"], turn_policy=manifest["turn_policy"],
@@ -202,7 +205,7 @@ def build_entry(run_dir, session_dir, turn_cap=None, judge_receipt_path=None):
         judge_status=judge_status, transcript_head_chain_hash=actual_head, run_outcome=outcome,
         termination=receipt["termination"], turns=count_turns(records), transcript_record_count=len(records),
         verified_instances=normalized + (judge_instances or []),
-        discarded_judge_claims=discarded, curiosity=curiosity_events(records), coverage=facts,
+        discarded_judge_claims=discarded, curiosity=curiosity_events_delve(records) if game_id == "delve" else curiosity_events(records), coverage=facts,
         content_catalog=manifest["content_catalog"], eligibility_flags=eligibility,
         expected_content_change=None, game_id=game_id, schema_minor=manifest.get("schema_minor", 0),
         detector_set_status=detector_set_status, detector_notes=detector_notes)

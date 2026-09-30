@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from dnd_combat.__main__ import run_combat
-from dnd_combat.adventure import Adventure, make_character
+from dnd_combat.adventure import Adventure, RoomObject, make_character
 from dnd_combat.commands import resolve_combat_command
 from dnd_combat.narrator import Narrator
 from dnd_combat.session_log import RecordingNarrator, SessionRecorder
@@ -216,3 +216,69 @@ class InstantTextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OverkillAndVisibilityTests(unittest.TestCase):
+    """Genny's own test-only repair of Sandy pass 3 (REPAIR-P3-1..3)."""
+
+    def test_overkill_leaves_enemy_hp_exactly_zero(self):
+        game = Adventure(make_character("wizard", "Cy"))
+        game.start_encounter(FixedRoller(20, 1))
+        game.enemy.hp = 1
+
+        result = game.player_cast_magic_missile(FixedRoller(4, 4))
+
+        self.assertEqual(result.damage, 8)
+        self.assertEqual(game.enemy.hp, 0)
+
+    def test_plain_text_is_flushed_before_the_narrator_runs(self):
+        class FlushOnlyStream:
+            """Exposes writes to a reader only after flush(), like a buffered TTY."""
+
+            def __init__(self):
+                self.pending, self.visible, self.flushes = [], [], 0
+
+            def write(self, text):
+                self.pending.append(text)
+                return len(text)
+
+            def flush(self):
+                self.visible.extend(self.pending)
+                self.pending.clear()
+                self.flushes += 1
+
+        stream = FlushOnlyStream()
+        seen = {}
+
+        class Watcher(Narrator):
+            def narrate(self, event, facts, plain_text):
+                seen["visible"] = "".join(stream.visible)
+                return plain_text
+
+        with redirect_stdout(stream):
+            emit(Watcher(), "enter_room", {}, "NOW")
+
+        self.assertEqual(seen["visible"], "NOW\n")
+
+    def test_preexisting_room_item_is_not_reported_as_loot(self):
+        from dnd_combat.__main__ import _emit_defeat_and_loot
+
+        game = Adventure(make_character("wizard", "Cy"))
+        game.room.objects.append(RoomObject("clay cup", "A chipped cup.", takeable=True))
+        items_before = set(game.room.items)
+        self.assertEqual(items_before, {"clay cup"})
+        game.enemy.hp = 0
+        events = []
+
+        class Recording(Narrator):
+            def narrate(self, event, facts, plain_text):
+                events.append(event)
+                return plain_text
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            _emit_defeat_and_loot(game, game.enemy, items_before, Recording())
+
+        self.assertEqual(events, ["enemy_defeated"])
+        self.assertNotIn("You notice", out.getvalue())
+        self.assertNotIn("clay cup", out.getvalue())

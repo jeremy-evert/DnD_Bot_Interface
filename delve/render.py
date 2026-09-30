@@ -184,7 +184,10 @@ def render_status(state, pack, memory=None):
         if hazards:
             hazard = hazards[0]
             lines.append(f"Hazard: {_get(hazard, 'tag').upper()} [{_get(hazard, 'zone')}].")
-    lines.append("Objects: " + ("; ".join(f"{_get(o, 'name')} [{_get(o, 'zone')}]" for o in present_objects) or "none") + ".")
+    # Ivy Amendment 5: make takeable room objects visible as pickup actions.
+    lines.append("Objects: " + ("; ".join(
+        f"{_get(o, 'name')} [{_get(o, 'zone')}]" + (" (get)" if _get(o, 'item_id') else "")
+        for o in present_objects) or "none") + ".")
     return "\n".join(lines)
 
 

@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 import time
 
-from .commands import HELP_FORMS, ParseProblem, parse_command
+from .commands import EnemyInspection, HELP_FORMS, ParseProblem, parse_command
 from .engine import Engine
 from .pack import load_engine_ready_pack
 from .render import RenderMemory, render_death, render_event, render_help, render_status, render_victory
@@ -51,6 +51,21 @@ def main(argv=None):
                 print("The delve pauses here. Goodbye.")
                 return 0
             parsed = parse_command(line, state, pack)
+            if isinstance(parsed, EnemyInspection):
+                enemy = next(e for e in pack.enemies if e.id == parsed.enemy_id)
+                runtime = state.enemies[enemy.id]
+                intent = next((i for i in enemy.intents if i.id == runtime.get('current_intent_id')), None)
+                intent_text = ''
+                if intent:
+                    intent_text = render_event({'key': intent.telegraph_key,
+                                                'fact_slots': {'enemy_name': enemy.name}},
+                                               pack, seed, memory)
+                    prefix = enemy.name + ':'
+                    if intent_text.casefold().startswith(prefix.casefold()):
+                        intent_text = intent_text[len(prefix):].strip()
+                print(f"{enemy.name} {runtime['hp']}/{enemy.stats.hp} HP "
+                      f"[{runtime.get('zone', enemy.start_zone)}] — {intent_text or 'no declared intent'}")
+                continue
             if isinstance(parsed, ParseProblem):
                 if parsed.text:
                     print(parsed.text)
@@ -64,6 +79,7 @@ def main(argv=None):
                         continue
                     if event.key == "help":
                         tip = render_event(event, pack, seed, memory)
+                        tip += "\nObjects marked (get) can be picked up with get <name>."
                         print(render_help(HELP_FORMS, tip))
                         continue
                     print(render_event(event, pack, seed, memory))

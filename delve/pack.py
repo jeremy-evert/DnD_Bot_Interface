@@ -12,6 +12,7 @@ STRUCTURAL_KEYS = {
     'target.unknown': 'always', 'object.read': 'always', 'inventory': 'always',
     'help': 'always', 'terminal.quit': 'always', 'parse.unknown_verb': 'always',
     'target.ambiguous': 'always',
+    'target.not_held': 'takeable_objects',
     'attack.hit': 'enemies', 'attack.miss': 'enemies',
     'brace.success': 'enemies', 'brace.wasted': 'enemies',
     'shove.success': 'enemies', 'shove.fail': 'enemies',
@@ -33,6 +34,7 @@ ENGINE_SLOTS = {
     'room.enter': {'room_name'}, 'room.return': {'room_name'},
     'move.blocked': {'enemy_name'}, 'move.no_exit': {'direction'},
     'target.unknown': {'target'}, 'target.ambiguous': {'target', 'candidates'},
+    'target.not_held': {'target'},
     'object.read': {'object_name'}, 'inventory': {'items'}, 'help': set(),
     'terminal.quit': set(), 'parse.unknown_verb': {'verb'},
     'attack.hit': {'enemy_name', 'damage'}, 'attack.miss': {'margin'},
@@ -160,6 +162,27 @@ def _id(x,p,reserved=False):
     return _str(x,p,m.ID_RE)
 def _strings(xs,p,fn=_id): return tuple(fn(v,f'{p}[{i}]') for i,v in enumerate(_arr(xs,p)))
 
+def _validate_unicode(value, path='$'):
+    if isinstance(value, str):
+        try: value.encode('utf-8')
+        except UnicodeEncodeError: _err('E_SCHEMA', path, 'string is not valid UTF-8 text')
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            _validate_unicode(key, f'{path}.<key>')
+            _validate_unicode(child, f'{path}.{key}')
+    elif isinstance(value, list):
+        for index, child in enumerate(value): _validate_unicode(child, f'{path}[{index}]')
+
+def _strict_json(text):
+    def pairs(values):
+        out={}
+        for key, value in values:
+            if key in out: raise ValueError(f'duplicate JSON key {key!r}')
+            out[key]=value
+        return out
+    def constant(value): raise ValueError(f'nonstandard JSON constant {value}')
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+
 def _effect(x,p):
     if not isinstance(x,dict): _err('E_SCHEMA',p,'expected effect object')
     typ=x.get('type')
@@ -250,6 +273,14 @@ def _parse(d):
     terms=[]
     for i,x in enumerate(_arr(d['terminals'],'$.terminals')):
         p=f'$.terminals[{i}]'; _obj(x,p,('id','kind','all','event_key'),('retry_hint_key',)); preds=[]
+        terminal_kind=_str(x['kind'],p+'.kind')
+        event_key=_key(x['event_key'],p+'.event_key')
+        expected={'victory':'terminal.victory','death':'terminal.death','dead':'terminal.death'}
+        if terminal_kind in expected and event_key != expected[terminal_kind]:
+            _err('E_TERMINAL_KEY',p+'.event_key',f'{terminal_kind} terminal must use {expected[terminal_kind]}')
+        retry_key=_key(x['retry_hint_key'],p+'.retry_hint_key') if 'retry_hint_key' in x else None
+        if retry_key is not None and retry_key!='terminal.retry':
+            _err('E_TERMINAL_KEY',p+'.retry_hint_key','death retry key must be terminal.retry')
         for j,v in enumerate(_arr(x['all'],p+'.all')):
             q=f'{p}.all[{j}]';
             if not isinstance(v,dict) or 'kind' not in v: _err('E_SCHEMA',q,'expected predicate object')
@@ -260,7 +291,7 @@ def _parse(d):
                 if k.endswith('_id'): pred[k]=_id(val,q+'.'+k,reserved=(kind=='flag_set' and val=='__player_hp_zero'))
                 elif k=='at': pred[k]=_int(val,q+'.at')
             preds.append(pred)
-        terms.append(m.Terminal(_id(x['id'],p+'.id'),_str(x['kind'],p+'.kind'),tuple(preds),_key(x['event_key'],p+'.event_key'),_key(x['retry_hint_key'],p+'.retry_hint_key') if 'retry_hint_key' in x else None))
+        terms.append(m.Terminal(_id(x['id'],p+'.id'),terminal_kind,tuple(preds),event_key,retry_key))
     b=d['bank']; _obj(b,'$.bank',('entries',)); entries=[]
     for i,x in enumerate(_arr(b['entries'],'$.bank.entries')):
         p=f'$.bank.entries[{i}]'
@@ -275,10 +306,11 @@ def load_pack(path_or_text_or_dict):
     elif isinstance(path_or_text_or_dict,(str,Path)):
         s=str(path_or_text_or_dict)
         try:
-            if isinstance(path_or_text_or_dict,Path) or (not s.lstrip().startswith(('{','[')) and Path(s).is_file()): data=json.loads(Path(s).read_text(encoding='utf-8'))
-            else: data=json.loads(s)
-        except (OSError, json.JSONDecodeError) as e: _err('E_SCHEMA','$',f'invalid JSON or unreadable path: {e}')
+            if isinstance(path_or_text_or_dict,Path) or (not s.lstrip().startswith(('{','[')) and Path(s).is_file()): data=_strict_json(Path(s).read_text(encoding='utf-8'))
+            else: data=_strict_json(s)
+        except (OSError, UnicodeError, ValueError) as e: _err('E_SCHEMA','$',f'invalid JSON or unreadable path: {e}')
     else: _err('E_SCHEMA','$','expected path, JSON text, or dict')
+    _validate_unicode(data)
     return validate_pack(_parse(data))
 
 def validate_pack(pack):
@@ -298,19 +330,21 @@ def validate_pack(pack):
             if obj.item_id not in items: _err('E_ITEM_UNKNOWN',f'object {obj.id}.item_id','unknown item '+obj.item_id)
             if obj.item_id in item_sources: _err('E_ITEM_DUPLICATE_SOURCE',f'object {obj.id}.item_id','item already has a source object')
             item_sources[obj.item_id]=obj.id
+    # Preserve the minimum-source diagnostic for a deleted or statically
+    # unreachable clue before checking its effect references.
+    static_rooms={pack.start_room_id}; pending=[pack.start_room_id]
+    while pending:
+        for exit in rooms[pending.pop()].exits:
+            if exit.to_room_id in rooms and exit.to_room_id not in static_rooms:
+                static_rooms.add(exit.to_room_id); pending.append(exit.to_room_id)
+    for fact in pack.facts:
+        sources={clues[clue_id].source_id for clue_id in fact.clue_ids
+                 if clue_id in clues and clues[clue_id].room_id in static_rooms}
+        if len(sources)<3:
+            _err('E_FACT_CLUE_COUNT',f'fact {fact.id}.clue_ids','payoff needs three reachable unique clue sources')
     if item_sources:
         for key in ('get.blocked','get.not_takeable','use.nothing'):
             _needbank({e.key:e for e in pack.bank},key,f'bank {key}')
-    # Count before resolving individual clue/effect references so a deleted clue
-    # is reported as an insufficient payoff source, as the spec mutation requires.
-    reachable={pack.start_room_id}; todo=[pack.start_room_id]
-    while todo:
-        here=todo.pop()
-        for ex in rooms[here].exits:
-            if ex.to_room_id in rooms and ex.to_room_id not in reachable: reachable.add(ex.to_room_id); todo.append(ex.to_room_id)
-    for f in pack.facts:
-        sources={clues[c].source_id for c in f.clue_ids if c in clues and clues[c].room_id in reachable}
-        if len(sources)<3: _err('E_FACT_CLUE_COUNT',f'fact {f.id}.clue_ids','payoff needs three reachable unique clue sources')
     bank={e.key:e for e in pack.bank}
     if len(bank)!=len(pack.bank): _err('E_SCHEMA','$.bank.entries','duplicate bank key')
     for r in pack.rooms:
@@ -371,15 +405,88 @@ def validate_pack(pack):
         source_room=objects[clue.source_id][0].id if clue.source_id in objects else next((r.id for r in pack.rooms if any(clue.source_id==o.id for o in r.objects)),None)
         if source_room!=clue.room_id: _err('E_SCHEMA',f'clue {clue.id}.room_id','source is not in declared room')
         _needbank(bank,clue.event_key,f'clue {clue.id}.event_key')
-    # Static reachability deliberately treats gated exits as open.
-    reachable={pack.start_room_id}; todo=[pack.start_room_id]
-    while todo:
-        here=todo.pop()
-        for ex in rooms[here].exits:
-            if ex.to_room_id not in reachable: reachable.add(ex.to_room_id); todo.append(ex.to_room_id)
+        if clue.source_id in objects:
+            source_reader=objects[clue.source_id][1].reader
+        else:
+            source_reader=items[clue.source_id].reader
+        if source_reader is None or not any(effect.type=='reveal_clue' and effect.clue_id==clue.id
+                                            for effect in source_reader.effects):
+            _err('E_CLUE_UNREVEALABLE',f'clue {clue.id}.source_id','source reader cannot reveal this clue')
+    # Reachability is a least fixed point: a gate opens only after a producer
+    # reachable on the current graph sets its flag or opens that exact exit.
+    reachable={pack.start_room_id}; reachable_flags=set(); reachable_clues=set(); reachable_clocks=set()
+    opened_exits=set(); all_effects=[]
+    for room in pack.rooms:
+        for obj in room.objects:
+            if obj.reader: all_effects.extend(obj.reader.effects)
+    for item in pack.items: all_effects.extend(item.reader.effects)
+    for enemy in pack.enemies:
+        for intent in enemy.intents: all_effects.extend(intent.effects)
+    for hazard in pack.hazards: all_effects.extend(hazard.effects)
+    for clock in pack.clocks:
+        for threshold in clock.thresholds: all_effects.extend(threshold.effects)
+    for fact in pack.facts: all_effects.extend(fact.payoff_effects)
+    item_source_room={obj.item_id: room.id for room in pack.rooms for obj in room.objects if obj.item_id}
+    changed=True
+    while changed:
+        changed=False
+        for room_id in tuple(reachable):
+            for exit in rooms[room_id].exits:
+                gate_open=(exit.gate is None or exit.gate.flag_id in reachable_flags
+                           or (room_id,exit.direction) in opened_exits)
+                if gate_open and exit.to_room_id not in reachable:
+                    reachable.add(exit.to_room_id); changed=True
+        effects=[]
+        for room in pack.rooms:
+            if room.id not in reachable: continue
+            for obj in room.objects:
+                reader=obj.reader
+                if reader and (reader.when_room_id is None or reader.when_room_id==room.id) and (reader.when_flag_id is None or reader.when_flag_id in reachable_flags):
+                    effects.extend(reader.effects)
+        for item in pack.items:
+            reader=item.reader
+            if item_source_room.get(item.id) in reachable and (reader.when_room_id is None or reader.when_room_id in reachable) and (reader.when_flag_id is None or reader.when_flag_id in reachable_flags):
+                effects.extend(reader.effects)
+        for enemy in pack.enemies:
+            if enemy.room_id in reachable:
+                for intent in enemy.intents: effects.extend(intent.effects)
+        for hazard in pack.hazards:
+            required=hazard.trigger.get('requires_flag_id')
+            if hazard.room_id in reachable and (required is None or required in reachable_flags): effects.extend(hazard.effects)
+        # Declared movement/retreat sources make reachable clocks and thresholds usable.
+        for clock in pack.clocks:
+            if any(source.source in ('move','retreat') for source in clock.tick_sources) and reachable:
+                reachable_clocks.add(clock.id)
+            if clock.id in reachable_clocks:
+                for threshold in clock.thresholds: effects.extend(threshold.effects)
+        for clue in pack.clues:
+            source_room=objects[clue.source_id][0].id if clue.source_id in objects else item_source_room.get(clue.source_id)
+            source_reader=objects[clue.source_id][1].reader if clue.source_id in objects else items[clue.source_id].reader
+            if (source_room in reachable and source_reader and
+                (source_reader.when_room_id is None or source_reader.when_room_id==source_room) and
+                (source_reader.when_flag_id is None or source_reader.when_flag_id in reachable_flags) and
+                any(effect.type=='reveal_clue' and effect.clue_id==clue.id for effect in source_reader.effects)):
+                if clue.id not in reachable_clues: reachable_clues.add(clue.id); changed=True
+        for fact in pack.facts:
+            if fact.payoff and set(fact.clue_ids).issubset(reachable_clues): effects.extend(fact.payoff_effects)
+        for effect in effects:
+            if effect.type=='set_flag' and effect.value and effect.flag_id not in reachable_flags:
+                reachable_flags.add(effect.flag_id); changed=True
+            elif effect.type=='open_exit':
+                token=(effect.room_id,effect.direction)
+                if token not in opened_exits: opened_exits.add(token); changed=True
+            elif effect.type=='tick_clock':
+                if effect.clock_id not in reachable_clocks: reachable_clocks.add(effect.clock_id); changed=True
+    for room in pack.rooms:
+        for exit in room.exits:
+            if exit.gate and exit.gate.flag_id not in reachable_flags and (room.id,exit.direction) not in opened_exits:
+                _err('E_GATE_UNREACHABLE',f'room {room.id}.exit.{exit.direction}.gate.flag_id','gate flag has no producer reachable without crossing this gate')
+    for clue in pack.clues:
+        if clue.id not in reachable_clues:
+            _err('E_CLUE_UNREACHABLE',f'clue {clue.id}.source_id','clue source is not reachable with its reader conditions')
     for f in pack.facts:
         listed=[clues[c] for c in f.clue_ids if c in clues]
-        if len(listed)!=len(f.clue_ids) or len({c.source_id for c in listed if c.room_id in reachable})<3: _err('E_FACT_CLUE_COUNT',f'fact {f.id}.clue_ids','payoff needs three reachable unique clue sources')
+        if len(listed)!=len(f.clue_ids) or len({c.source_id for c in listed if c.id in reachable_clues})<3: _err('E_FACT_CLUE_COUNT',f'fact {f.id}.clue_ids','payoff needs three reachable unique clue sources')
         _validate_effects(f.payoff_effects,rooms,clues,clocks,objects)
     for t in pack.terminals:
         if t.kind not in ('victory','death','dead','quit','playing'): _err('E_SCHEMA',f'terminal {t.id}.kind','unknown terminal kind')
@@ -394,25 +501,12 @@ def validate_pack(pack):
                 if p['kind']=='room_is' and p['room_id'] not in reachable: possible=False
                 if p['kind']=='enemy_dead' and enemies[p['enemy_id']].room_id not in reachable: possible=False
             if not possible: _err('E_TERMINAL_UNREACHABLE',f'terminal {t.id}','victory predicate cannot be reached')
-    # Every condition that can block a route or clue source must have a
-    # reachable producer. Flags are monotonic capabilities in this milestone.
-    all_effects=[]
-    for room in pack.rooms:
-        for obj in room.objects:
-            if obj.reader: all_effects.extend(obj.reader.effects)
-    for item in pack.items: all_effects.extend(item.reader.effects)
-    for enemy in pack.enemies:
-        for intent in enemy.intents: all_effects.extend(intent.effects)
-    for hazard in pack.hazards: all_effects.extend(hazard.effects)
-    for clock in pack.clocks:
-        for threshold in clock.thresholds: all_effects.extend(threshold.effects)
-    for fact in pack.facts: all_effects.extend(fact.payoff_effects)
-    settable={e.flag_id for e in all_effects if e.type=='set_flag' and e.value is True}
+    # Conditional producers count only when their room and prerequisites are reachable.
+    settable=set(reachable_flags)
     settable.add('__player_hp_zero')
     for room in pack.rooms:
         for exit in room.exits:
-            opens = any(effect.type=='open_exit' and effect.room_id==room.id and effect.direction==exit.direction
-                        for effect in all_effects)
+            opens = (room.id,exit.direction) in opened_exits
             if exit.gate and exit.gate.flag_id not in settable and not opens:
                 _err('E_FLAG_UNSETTABLE',f'room {room.id}.exit.{exit.direction}.gate.flag_id','no effect can set this gate flag')
         for obj in room.objects:
@@ -441,8 +535,8 @@ def validate_pack(pack):
                 or (clue.source_id in objects and reader.when_room_id not in (None, clue.room_id))):
             _err('E_CLUE_UNREVEALABLE',f'clue {clue.id}.source_id','source reader cannot reveal this clue')
     for effect in all_effects:
-        if effect.type=='end_run' and effect.state=='victory':
-            _err('E_UNSUPPORTED_MECHANIC','$.effects','victory may only be reached through a victory terminal predicate')
+        if effect.type=='end_run' and effect.state in ('victory','dead'):
+            _err('E_UNSUPPORTED_MECHANIC','$.effects',f'{effect.state} may only be reached through its validated terminal path')
     # Every bank string's placeholders must exactly equal the declared slot set.
     for e in pack.bank:
         if not e.fallback.strip(): _err('E_BANK_FALLBACK_MISSING',f'bank {e.key}.fallback','fallback must be nonempty')

@@ -47,6 +47,13 @@ class PackTests(unittest.TestCase):
         self.assertEqual(first,second)
         with self.assertRaises(FrozenInstanceError): first.id='changed'
 
+    def test_strict_json_rejects_duplicate_keys_and_nonstandard_constants(self):
+        valid=json.dumps(EXAMPLE)
+        duplicate=valid.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1', 1)
+        for text in (duplicate, valid.replace('"schema_version": 1', '"schema_version": NaN', 1)):
+            with self.subTest(text=text[:48]), self.assertRaises(PackError) as cm: load_pack(text)
+            self.assertEqual(cm.exception.code,'E_SCHEMA')
+
     def _reject(self,code):
         with self.assertRaises(PackError) as cm: load_pack(mutation(code))
         self.assertEqual(cm.exception.code,code)
@@ -103,9 +110,70 @@ class PackTests(unittest.TestCase):
 
     def test_static_unreachable_victory_mutant_is_killed(self):
         d=copy.deepcopy(EXAMPLE)
-        d['terminals'][0]['all']=[{'kind':'room_is','room_id':'entry'}, {'kind':'room_is','room_id':'vault'}]
+        d['rooms'][0]['exits']=[]
+        d['terminals'][0]['all']=[{'kind':'enemy_dead','enemy_id':'captain'}]
         with self.assertRaises(PackError) as cm: load_pack(d)
         self.assertEqual(cm.exception.code,'E_TERMINAL_UNREACHABLE')
+
+    def test_dead_effect_is_rejected_in_any_effect_list(self):
+        for where in ('reader', 'threshold', 'hazard', 'payoff', 'intent'):
+            d=copy.deepcopy(EXAMPLE)
+            dead={'type':'end_run','state':'dead'}
+            if where=='reader': d['rooms'][0]['objects'][0]['reader']['effects'].append(dead)
+            elif where=='threshold': d['clocks'][0]['thresholds'][0]['effects'].append(dead)
+            elif where=='hazard': d['hazards'][0]['effects'].append(dead)
+            elif where=='payoff': d['truth']['facts'][0]['payoff_effects'].append(dead)
+            else: d['enemies'][0]['intents'][0]['effects'].append(dead)
+            with self.subTest(where=where), self.assertRaises(PackError) as cm: load_pack(d)
+            self.assertEqual(cm.exception.code, 'E_UNSUPPORTED_MECHANIC')
+        d=copy.deepcopy(EXAMPLE)
+        d['rooms'][0]['objects'][0]['reader']['effects'].append({'type':'end_run','state':'quit'})
+        self.assertEqual(load_pack(d).id, 'two_room_demo')
+
+    def test_terminal_event_keys_are_fixed_interface_keys(self):
+        for index, key in ((0, 'custom.victory'), (1, 'custom.death')):
+            d=copy.deepcopy(EXAMPLE)
+            d['terminals'][index]['event_key']=key
+            with self.subTest(key=key), self.assertRaises(PackError) as cm: load_pack(d)
+            self.assertEqual(cm.exception.code, 'E_TERMINAL_KEY')
+        d=copy.deepcopy(EXAMPLE)
+        next(t for t in d['terminals'] if t['kind']=='death')['retry_hint_key']='custom.retry'
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code, 'E_TERMINAL_KEY')
+        shipped=load_engine_ready_pack(Path(__file__).parents[1] / 'delve/content/mossy_fast_slice.json')
+        self.assertTrue(shipped.id)
+
+    def test_self_locked_clue_gate_is_unreachable(self):
+        d=copy.deepcopy(EXAMPLE)
+        bell=d['rooms'][0]['objects'].pop(0)
+        bell['reader']['effects']=[{'type':'set_flag','flag_id':'mira_lock','value':True},
+                                   {'type':'reveal_clue','clue_id':'bell_silenced'}]
+        d['rooms'][1]['objects'].append(bell)
+        d['truth']['clues'][0]['room_id']='vault'
+        # The bell's producer cannot be used until the gated destination is reached.
+        d['rooms'][0]['exits'][0]['gate']={'kind':'flag','flag_id':'mira_lock','denial_event_key':'gate.denied'}
+        d['bank']['entries'].append({'key':'gate.denied','fact_slots':[],'variants':['Denied.'],'fallback':'Denied.'})
+        # Leave the other clue sources reachable, so this targets just the gated one.
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertIn(cm.exception.code, ('E_GATE_UNREACHABLE','E_CLUE_UNREACHABLE'))
+
+    def test_surrogate_strings_rejected_with_schema_path(self):
+        d=copy.deepcopy(EXAMPLE); d['title']='bad\ud800title'
+        with self.assertRaises(PackError) as cm: load_pack(d)
+        self.assertEqual(cm.exception.code, 'E_SCHEMA')
+        self.assertIn('title', cm.exception.path)
+        with self.assertRaises(PackError) as escaped: load_pack(json.dumps(d))
+        self.assertEqual(escaped.exception.code, 'E_SCHEMA')
+        self.assertIn('title', escaped.exception.path)
+        from delve import __main__ as terminal
+        from io import StringIO
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'surrogate.json'
+            path.write_text(json.dumps(d),encoding='utf-8')
+            output=StringIO()
+            with patch('builtins.input',side_effect=AssertionError('input must not start')), patch('sys.stdout',output):
+                self.assertEqual(terminal.main(['--pack',str(path),'--class','fighter']),2)
+            self.assertIn('E_SCHEMA',output.getvalue())
 
     def test_flag_predicates_and_unrevealed_clues_are_rejected(self):
         d=copy.deepcopy(EXAMPLE)
@@ -341,7 +409,7 @@ class PackTests(unittest.TestCase):
         for suffix in ('victory','death','closed'):
             self.assertIn('terminal.'+suffix,STRUCTURAL_KEYS)
         self.assertNotIn('combat.not_yet', STRUCTURAL_KEYS)  # Amendment 4 item 8 retires this key.
-        self.assertTrue({'enemy.defeated','target.ambiguous','parse.unknown_verb'} <= STRUCTURAL_KEYS.keys())
+        self.assertTrue({'enemy.defeated','target.ambiguous','parse.unknown_verb','target.not_held'} <= STRUCTURAL_KEYS.keys())
         self.assertEqual(set(ENGINE_SLOTS),set(STRUCTURAL_KEYS))
         self.assertEqual(ENGINE_SLOTS['intent.cancelled'],{'enemy_name'})
         self.assertEqual(ENGINE_SLOTS['get.blocked'],{'enemy_name'})

@@ -57,6 +57,13 @@ class DelveContentTests(unittest.TestCase):
     def test_shipped_pack_is_engine_ready(self):
         self.assertEqual(load_engine_ready_pack(PACK_PATH).id, DATA['id'])
 
+    def test_mira_handover_consumes_the_ring_and_guard_names_the_leaf(self):
+        ring=next(item for item in DATA['items'] if item['id']=='brass_ring')
+        self.assertTrue(ring['consumed_on_use'])
+        guard=bank_map()['intent.captain.guard']
+        self.assertGreaterEqual(len(set(guard['variants'])),6)
+        self.assertTrue(all('silver leaf' in line.casefold() for line in guard['variants']))
+
     def test_real_engine_route_wins_and_blind_vault_attack_costs_hp(self):
         pack = load_engine_ready_pack(PACK_PATH)
 

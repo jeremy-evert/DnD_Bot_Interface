@@ -236,5 +236,31 @@ class HazardTests(unittest.TestCase):
         with self.assertRaises(Exception) as cm: load_pack(d)
         self.assertEqual(cm.exception.code,'E_UNSUPPORTED_MECHANIC')
 
+    def test_shove_uses_the_first_hazard_whose_gate_is_open(self):
+        d=copy.deepcopy(EXAMPLE)
+        d['rooms'][0]['objects'][0]['reader']['effects'].append({'type':'set_flag','flag_id':'hidden_route','value':True})
+        d['hazards'].insert(0, {
+            'id':'entry_fire', 'room_id':'vault', 'zone':'hazard', 'tag':'fire',
+            'event_key':'hazard.fire',
+            'trigger':{'action':'move','requires_flag_id':None},
+            'effects':[{'type':'damage','target':'player','amount':1}],
+        })
+        d['bank']['entries'].append({'key':'hazard.fire','fact_slots':[],
+                                     'variants':['Fire.'],'fallback':'Fire.'})
+        d['hazards']=[
+            *d['hazards'][:1],
+            {'id':'locked_collapse','room_id':'vault','zone':'hazard','tag':'collapse','event_key':'hazard.collapse',
+             'trigger':{'action':'shove','requires_flag_id':'hidden_route'},
+             'effects':[{'type':'damage','target':'enemy','amount':1}]},
+            {'id':'open_collapse','room_id':'vault','zone':'hazard','tag':'collapse','event_key':'hazard.collapse',
+             'trigger':{'action':'shove','requires_flag_id':None},
+             'effects':[{'type':'damage','target':'enemy','amount':7}]},
+        ]
+        pack=load_pack(d); state=DelveState.new(pack,3,'fighter'); state.room_id='vault'; state.player['zone']='doorway'
+        engine=Engine(pack,state); state.enemies['captain']['current_intent_id']='smash'
+        before=state.enemies['captain']['hp']
+        engine.apply(Action('shove'))
+        self.assertEqual(state.enemies['captain']['hp'],before-7)
+
 
 if __name__ == '__main__': unittest.main()

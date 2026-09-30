@@ -1,5 +1,7 @@
 import copy
+import json
 import random
+import re
 import socket
 import time
 import unittest
@@ -8,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from delve import __main__ as terminal
-from delve.commands import COMMANDS, HELP_FORMS, ParseProblem, parse_command
+from delve.commands import COMMANDS, HELP_FORMS, EnemyInspection, ParseProblem, parse_command
 from delve.engine import Action, Engine
-from delve.pack import load_engine_ready_pack
+from delve.pack import load_engine_ready_pack, load_pack
 from delve.render import RenderMemory, render_event, render_status
 from delve.state import DelveState
 
@@ -169,6 +171,7 @@ class DelveTerminalTests(unittest.TestCase):
         for alias in aliases:
             with self.subTest(alias=alias):
                 self.assertIn(alias, help_output.casefold())
+        self.assertIn('marked (get)',help_output)
         bank_help = next(entry for entry in self.pack.bank if entry.key == "help")
         self.assertTrue(any(tip in output for tip in bank_help.variants))
 
@@ -195,6 +198,79 @@ class DelveTerminalTests(unittest.TestCase):
                 self.assertIn("shove an enemy", problem.text)
                 self.assertEqual(before, state.snapshot())
 
+    def test_enemy_look_resolves_without_turn_or_state_change(self):
+        state=DelveState.new(self.pack,1,'fighter')
+        before=copy.deepcopy(state.snapshot())
+        for command in ('x Goblin','look Goblin','x goblin','x gob'):
+            parsed=parse_command(command,state,self.pack)
+            self.assertEqual(getattr(parsed,'enemy_id',None),'goblin')
+        state.room_id='hollow_vault'
+        for command in ('x captain','look Hobgoblin Captain','x Captain'):
+            parsed=parse_command(command,state,self.pack)
+            self.assertEqual(getattr(parsed,'enemy_id',None),'captain')
+        state.room_id='mossy_entry'
+        real_apply=Engine.apply
+        applied=[]
+        def record_apply(engine, action):
+            applied.append(action)
+            return real_apply(engine, action)
+        with patch('builtins.input',side_effect=['x Goblin','q']), patch('sys.stdout',StringIO()) as output:
+            with patch.object(terminal.Engine,'apply',record_apply):
+                self.assertEqual(terminal.main(['--seed','1','--class','fighter']),0)
+        self.assertEqual([action.verb for action in applied],['quit'])
+        text=output.getvalue()
+        self.assertIn('Goblin',text)
+        self.assertIn('8/8 HP',text)
+        self.assertIn('[doorway]',text)
+        self.assertIn('grab',text.casefold())
+        self.assertEqual(before,state.snapshot())
+
+    def test_present_takeable_object_not_in_hand_gets_pickup_hint(self):
+        state=DelveState.new(self.pack,1,'fighter')
+        state.room_id='collapsed_observatory'
+        for command in ('use offering bowl','throw offering bowl','give offering bowl'):
+            with self.subTest(command=command):
+                problem=parse_command(command,state,self.pack)
+                self.assertIsInstance(problem,ParseProblem)
+                self.assertEqual(problem.message_key,'target.not_held')
+                self.assertEqual(problem.fact_slots,{'target':'offering bowl'})
+        # Parser response is bank-rendered and leaves the room loop untouched.
+        _,output=self.play(['']+['attack']*6+['east','use offering bowl','q'],seed=1)
+        self.assertIn('get offering bowl',output)
+
+    def test_not_held_bank_variants_follow_the_short_dry_voice(self):
+        entry=next(e for e in self.pack.bank if e.key=='target.not_held')
+        self.assertGreaterEqual(len(set(entry.variants)),4)
+        self.assertTrue(all('{{target}}' in line for line in entry.variants))
+        self.assertTrue(all(not re.search(r'\d', line) for line in entry.variants))
+
+    def test_fire_hazard_inspection_does_not_claim_shove_triggers_it(self):
+        data=copy.deepcopy(json.loads(re.search(r'### Complete valid example\s*```json\s*(.*?)\s*```',
+                                                (Path(__file__).parents[1]/'docs/DELVE_M1_SPEC.md').read_text(),re.S).group(1)))
+        data['hazards'][0].update(tag='fire',trigger={'action':'move','requires_flag_id':None},
+                                  effects=[{'type':'damage','target':'player','amount':3}])
+        pack=load_pack(data); state=DelveState.new(pack,1,'fighter'); state.room_id='vault'
+        parsed=parse_command('x fire',state,pack)
+        self.assertIsInstance(parsed,ParseProblem)
+        self.assertIn('burns when you enter',parsed.text)
+        self.assertNotIn('shove',parsed.text)
+
+    def test_throw_at_keeps_named_enemy_target(self):
+        state=DelveState.new(self.pack,1,'fighter')
+        state.room_id='hollow_vault'
+        state.inventory.append('brass_ring')
+        parsed=parse_command('throw brass ring at Hobgoblin Captain',state,self.pack)
+        self.assertEqual((parsed.verb,parsed.target_id,parsed.enemy_target_id),('throw','brass_ring','captain'))
+
+    def test_hand_over_ring_consumes_it_but_mira_clue_still_works(self):
+        actions=['']+['attack']*6+['get brass ring','east','south','give ring to Mira','inventory',
+                         'give ring to Mira','inventory','x Mira','q']
+        code,output=self.play(actions,seed=1)
+        self.assertEqual(code,0)
+        self.assertIn('In hand and in pocket: .',output)
+        self.assertIn('Not here. Some things only work in the right company.',output)
+        self.assertTrue(any(line in output for line in {e.key:e for e in self.pack.bank}['clue.mira'].variants))
+
     def test_unknown_verb_bank_line_always_points_to_help(self):
         parsed = parse_command("teleport", DelveState.new(self.pack, 1, "fighter"), self.pack)
         self.assertIsInstance(parsed, ParseProblem)
@@ -212,7 +288,7 @@ class DelveTerminalTests(unittest.TestCase):
             line = rng.choice(aliases) + rng.choice(suffixes)
             before = copy.deepcopy(state.snapshot())
             parsed = parse_command(line, state, self.pack)
-            self.assertTrue(isinstance(parsed, (Action, ParseProblem)), line)
+            self.assertTrue(isinstance(parsed, (Action, ParseProblem, EnemyInspection)), line)
             if isinstance(parsed, ParseProblem):
                 self.assertEqual(before, state.snapshot(), line)
 

@@ -10,6 +10,7 @@ class Action:
     verb: str
     target_id: str | None = None
     direction: str | None = None
+    enemy_target_id: str | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -50,7 +51,9 @@ class Engine:
             return self._record([e])
         verb = action.verb
         events = []
-        foe_at_start = self._living_enemy()
+        requested_enemy = (action.enemy_target_id if verb == 'throw' else
+                           action.target_id if verb in ('attack', 'shove') else None)
+        foe_at_start = self._enemy_for_action(requested_enemy)
         intent_at_start = self._current_intent(foe_at_start) if foe_at_start else None
         valid = True
         if verb in ('n','s','e','w','go','move'):
@@ -109,7 +112,9 @@ class Engine:
                 self._finish_round(foe_at_start, intent_at_start, events)
         elif verb in ('attack','shove','brace','throw','retreat'):
             if verb == 'attack':
-                if not foe_at_start or not intent_at_start:
+                if requested_enemy and (foe_at_start is None or intent_at_start is None):
+                    events.append(self._event('target.unknown', {'target': requested_enemy})); valid=False
+                elif not foe_at_start or not intent_at_start:
                     events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
                     self._attack(foe_at_start, intent_at_start, events)
@@ -127,7 +132,9 @@ class Engine:
             elif verb == 'retreat':
                 if not self._retreat(action.direction, foe_at_start, intent_at_start, events): valid=False
             elif verb == 'shove':
-                if not foe_at_start or not intent_at_start:
+                if requested_enemy and (foe_at_start is None or intent_at_start is None):
+                    events.append(self._event('target.unknown', {'target': requested_enemy})); valid=False
+                elif not foe_at_start or not intent_at_start:
                     events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
                     result = self._shove(foe_at_start, intent_at_start, events)
@@ -138,6 +145,8 @@ class Engine:
             elif verb == 'throw':
                 if action.target_id not in s.inventory:
                     events.append(self._event('target.unknown', {'target': action.target_id or ''})); valid=False
+                elif action.enemy_target_id and (not foe_at_start or not intent_at_start):
+                    events.append(self._event('target.unknown', {'target': action.enemy_target_id})); valid=False
                 elif not foe_at_start or not intent_at_start:
                     events.append(self._event('target.unknown', {'target': action.target_id or 'enemy'})); valid=False
                 else:
@@ -341,6 +350,12 @@ class Engine:
     def _living_enemy(self):
         return next((e for e in self.pack.enemies if e.room_id == self.state.room_id and self.state.enemies[e.id]['hp'] > 0), None)
 
+    def _enemy_for_action(self, target_id=None):
+        living = [e for e in self.pack.enemies
+                  if e.room_id == self.state.room_id and self.state.enemies[e.id]['hp'] > 0]
+        if target_id is None: return living[0] if living else None
+        return next((enemy for enemy in living if enemy.id == target_id), None)
+
     def _reader_ready(self, reader):
         return (reader.when_room_id is None or reader.when_room_id == self.state.room_id) and (reader.when_flag_id is None or reader.when_flag_id in self.state.flags)
 
@@ -356,6 +371,7 @@ class Engine:
 
     def _use(self, target):
         if target not in self.state.inventory:
+            if target in self.items: return [self._event('use.nothing')]
             return [self._event('target.unknown', {'target': target or ''})]
         item = self.items[target]; reader = item.reader
         if reader.on != 'use' or not self._reader_ready(reader): return [self._event('use.nothing')]
@@ -398,7 +414,7 @@ class Engine:
                 if e.object_id in s.present_objects[e.room_id]: s.present_objects[e.room_id].remove(e.object_id)
             elif e.type == 'open_exit':
                 s.flags.add('__open_exit:' + e.room_id + ':' + e.direction)
-            elif e.type == 'end_run' and e.state != 'victory': s.terminal = e.state
+            elif e.type == 'end_run' and e.state == 'quit': s.terminal = 'quit'
             elif e.type == 'interrupt_intent':
                 foe=self._living_enemy()
                 if foe: s.enemies[foe.id]['current_intent_id'] = None

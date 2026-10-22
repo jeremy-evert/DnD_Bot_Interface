@@ -19,6 +19,7 @@ EXPLORATION_COMMANDS = DeterministicMatcher(
 COMBAT_COMMANDS = DeterministicMatcher(
     (
         MatchCandidate("attack", "attack", ("a",)),
+        MatchCandidate("cast", "cast", ("c", "magic", "missile", "magic missile")),
         MatchCandidate("use", "use", ("u", "potion", "use potion")),
         MatchCandidate("status", "status", ("s",)),
     )

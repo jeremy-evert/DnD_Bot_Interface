@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 
-from .combat import AttackResult, Creature, Roller, attack, roll_die, roll_initiative
+from .combat import AttackResult, Creature, Roller, attack, magic_missile, roll_die, roll_initiative
 from .matching import DeterministicMatcher, MatchCandidate
 from .world import HEALING_POTION, Room, RoomObject, make_character, make_dungeon
 _SAFE_OBJECT_NAME = re.compile(r"^[a-z][a-z' -]{1,48}$")
@@ -167,6 +167,7 @@ class Adventure:
         hero_initiative = roll_initiative(self.hero, roller)
         enemy_initiative = roll_initiative(self.enemy, roller)
         self.room.encounter_started = True
+        self.hero.spell_charges = self.hero.max_spell_charges
         self.combat_turn = "hero" if hero_initiative >= enemy_initiative else "enemy"
         return hero_initiative, enemy_initiative
 
@@ -174,6 +175,21 @@ class Adventure:
         if not self.in_combat or self.combat_turn != "hero":
             raise ValueError("It is not the hero's attack turn.")
         result = attack(self.hero, self.enemy, roller)
+        self._finish_or_pass_turn()
+        return result
+
+    def player_cast_magic_missile(self, roller: Roller = roll_die) -> AttackResult | None:
+        """Cast Magic Missile on the hero's turn.
+
+        Returns None without spending the turn if the hero has no charges left,
+        exactly like an unavailable potion.
+        """
+        if not self.in_combat or self.combat_turn != "hero":
+            raise ValueError("It is not the hero's turn.")
+        if self.hero.spell_charges <= 0:
+            return None
+        self.hero.spell_charges -= 1
+        result = magic_missile(self.enemy, roller)
         self._finish_or_pass_turn()
         return result
 

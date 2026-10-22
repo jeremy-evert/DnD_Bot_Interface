@@ -8,7 +8,15 @@ from .narrator import Narrator
 
 
 def emit(narrator: Narrator, event: str, facts: dict, plain_text: str) -> None:
-    print(narrator.narrate(event, facts, plain_text))
+    """Show the engine's plain text at once, then the narration when it arrives."""
+    print(plain_text, flush=True)
+    narrated = narrator.narrate(event, facts, plain_text)
+    if narrated == plain_text:
+        return
+    if narrated.startswith(plain_text):
+        narrated = narrated[len(plain_text):].lstrip("\n")
+    if narrated:
+        print(narrated)
 
 
 def show_status(game: Adventure) -> None:

@@ -37,13 +37,14 @@ REFUSAL_KEYS = {
     "parse.unknown_verb", "target.unknown", "target.ambiguous",
     # Valid commands refused because their target/object cannot be acted on now.
     "target.not_held", "move.no_exit", "move.blocked", "get.blocked",
-    "get.not_takeable", "use.nothing",
+    "get.not_takeable", "use.nothing", "retreat.help",
 }
 
 # Classification is intentionally exhaustive (checked against the current pack
 # in tests). throw.fizzle is a consequence: the item is spent and the enemy's
 # attack still resolves, so its message must not suppress consequence checks.
 NOT_A_REFUSAL = {
+    "look.held": "Flavor text for inspecting a held item; it does not reject a request.",
     "room.entry": "Scene description; it does not reject a player request.",
     "room.observatory": "Scene description; it does not reject a player request.",
     "room.chart_chamber": "Scene description; it does not reject a player request.",

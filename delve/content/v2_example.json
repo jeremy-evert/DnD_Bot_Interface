@@ -1,0 +1,982 @@
+{
+  "schema_version": 2,
+  "id": "menagerie_example",
+  "title": "The Sundered Menagerie",
+  "start_room_id": "gate",
+  "rooms": [
+    {
+      "id": "gate",
+      "title": "Broken Gate",
+      "exits": [
+        "balcony"
+      ],
+      "tags": []
+    },
+    {
+      "id": "balcony",
+      "title": "Mira’s Balcony",
+      "exits": [
+        "gate"
+      ],
+      "tags": []
+    }
+  ],
+  "actors": [
+    {
+      "id": "drake",
+      "room_id": "gate",
+      "zone": "far",
+      "stats": {
+        "hp": 18,
+        "armor_class": 14
+      },
+      "faction": "predator",
+      "initiative": 8,
+      "state": "hungry",
+      "inactive_state": "sleeping",
+      "ecology_profile": "kiln_drake",
+      "intents": [
+        {
+          "id": "feed",
+          "kind": "feed",
+          "selector": "visible_actor",
+          "target": "living_prey",
+          "damage": 8,
+          "roll": false,
+          "consequence": "feed",
+          "event_key": "intent.drake.feed",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "flee",
+          "kind": "flee",
+          "selector": "visible_actor",
+          "target": "safe_destination",
+          "damage": 0,
+          "roll": false,
+          "consequence": "flee",
+          "event_key": "intent.drake.flee",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "destination_name"
+          ],
+          "destination": "balcony"
+        },
+        {
+          "id": "move",
+          "kind": "move",
+          "selector": "visible_actor",
+          "target": "connected_zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "move",
+          "event_key": "intent.drake.move",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "destination_name"
+          ],
+          "destination": "near"
+        },
+        {
+          "id": "hold",
+          "kind": "hold_position",
+          "selector": "visible_actor",
+          "target": "zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "none",
+          "event_key": "intent.drake.hold",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name"
+          ],
+          "destination": "far"
+        }
+      ],
+      "appetite": [
+        "hungry",
+        "scented_prey"
+      ],
+      "fears": [
+        "bright",
+        "crush"
+      ],
+      "aggro": [
+        "retaliate_last_attacker"
+      ],
+      "tags": []
+    },
+    {
+      "id": "goblin_hook",
+      "room_id": "gate",
+      "zone": "doorway",
+      "stats": {
+        "hp": 8,
+        "armor_class": 12
+      },
+      "faction": "goblin",
+      "initiative": 4,
+      "state": "guarding",
+      "ecology_profile": "banquet_goblin",
+      "intents": [
+        {
+          "id": "hook_strike",
+          "kind": "strike",
+          "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
+          "event_key": "intent.goblin.hook",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "hook_guard",
+          "kind": "guard",
+          "selector": "visible_actor",
+          "target": "zone",
+          "damage": 0,
+          "roll": false,
+          "consequence": "guard",
+          "event_key": "intent.goblin.guard",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name"
+          ]
+        }
+      ],
+      "appetite": [],
+      "fears": [
+        "bright"
+      ],
+      "aggro": [
+        "guard_exit",
+        "strike_intruder"
+      ]
+    },
+    {
+      "id": "goblin_slinger",
+      "room_id": "gate",
+      "zone": "far",
+      "stats": {
+        "hp": 7,
+        "armor_class": 12
+      },
+      "faction": "goblin",
+      "initiative": 3,
+      "state": "guarding",
+      "ecology_profile": "banquet_goblin",
+      "intents": [
+        {
+          "id": "sling",
+          "kind": "ranged",
+          "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
+          "event_key": "intent.goblin.slinger",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        },
+        {
+          "id": "sling_player",
+          "kind": "ranged",
+          "selector": "visible_actor",
+          "target": "visible_actor",
+          "damage": 2,
+          "roll": false,
+          "consequence": "damage",
+          "event_key": "intent.goblin.slinger_player",
+          "cancel_event_key": "actor.intent.cancelled",
+          "fact_slots": [
+            "actor_name",
+            "target_name",
+            "damage"
+          ]
+        }
+      ],
+      "appetite": [],
+      "fears": [
+        "bright"
+      ],
+      "aggro": [
+        "guard_food",
+        "return_to_post"
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "supper_table",
+      "room_id": "gate",
+      "zone": "near",
+      "tags": [
+        "flammable",
+        "oiled"
+      ]
+    },
+    {
+      "id": "map_object",
+      "room_id": "gate",
+      "zone": "far",
+      "tags": [
+        "flammable",
+        "fragile"
+      ]
+    },
+    {
+      "id": "awning",
+      "room_id": "gate",
+      "zone": "doorway",
+      "tags": [
+        "wet"
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "id": "oil_table",
+      "room_id": "gate",
+      "zone": "near",
+      "tags": [
+        "oiled",
+        "flammable"
+      ],
+      "object_id": "supper_table"
+    },
+    {
+      "id": "wet_awning",
+      "room_id": "gate",
+      "zone": "doorway",
+      "tags": [
+        "wet"
+      ]
+    },
+    {
+      "id": "silk_map",
+      "room_id": "gate",
+      "zone": "far",
+      "tags": [
+        "flammable",
+        "fragile"
+      ]
+    }
+  ],
+  "reaction_table": [
+    {
+      "id": "R1",
+      "name": "oil_flash",
+      "signal": "heat",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r1.oil_flash",
+      "fact_slots": []
+    },
+    {
+      "id": "R2",
+      "name": "ignition",
+      "signal": "heat",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r2.ignition",
+      "fact_slots": []
+    },
+    {
+      "id": "R3",
+      "name": "damp_heat",
+      "signal": "heat",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r3.damp_heat",
+      "fact_slots": []
+    },
+    {
+      "id": "R4",
+      "name": "fire_spread",
+      "signal": "heat",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r4.fire_spread",
+      "fact_slots": []
+    },
+    {
+      "id": "R5",
+      "name": "extinguish",
+      "signal": "water",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r5.extinguish",
+      "fact_slots": []
+    },
+    {
+      "id": "R6",
+      "name": "break",
+      "signal": "impact",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r6.break",
+      "fact_slots": []
+    },
+    {
+      "id": "R7",
+      "name": "drop",
+      "signal": "impact",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r7.drop",
+      "fact_slots": []
+    },
+    {
+      "id": "R8",
+      "name": "sound",
+      "signal": "sound",
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r8.sound",
+      "fact_slots": []
+    },
+    {
+      "id": "R9",
+      "name": "appetite",
+      "signal": null,
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r9.appetite",
+      "fact_slots": []
+    },
+    {
+      "id": "R10",
+      "name": "feeding",
+      "signal": null,
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r10.feeding",
+      "fact_slots": []
+    },
+    {
+      "id": "R11",
+      "name": "fear",
+      "signal": null,
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r11.fear",
+      "fact_slots": []
+    },
+    {
+      "id": "R12",
+      "name": "sight",
+      "signal": null,
+      "selector": "zone",
+      "fuel": 1,
+      "event_key": "material.r12.sight",
+      "fact_slots": []
+    }
+  ],
+  "reaction_order": [
+    "R5",
+    "R6",
+    "R1",
+    "R2",
+    "R4",
+    "R3",
+    "R8",
+    "R9",
+    "R11"
+  ],
+  "reaction_step_limit": 3,
+  "selectors": [
+    "actors_in_zone",
+    "named_actor",
+    "visible_actor",
+    "object_named",
+    "zone",
+    "connected_zone",
+    "living_prey",
+    "highest_priority_target",
+    "safe_destination",
+    "adjacent_zone",
+    "source_zone",
+    "landing_zone",
+    "player"
+  ],
+  "class_actions": [
+    {
+      "id": "fighter.hold_door",
+      "class_id": "fighter",
+      "key": "h",
+      "resource": {
+        "kind": "momentum",
+        "scope": "encounter",
+        "cost": 1,
+        "maximum": 3
+      },
+      "preconditions": {
+        "doorway": true
+      },
+      "cooldown": 0,
+      "effects": [
+        {
+          "type": "stance",
+          "beats": 2,
+          "selector": "actors_in_zone"
+        }
+      ],
+      "event_key": "ability.fighter.hold_door"
+    },
+    {
+      "id": "rogue.lure",
+      "class_id": "rogue",
+      "key": "l",
+      "resource": {
+        "kind": "trick",
+        "scope": "room",
+        "cost": 1,
+        "maximum": 2
+      },
+      "preconditions": {
+        "named_target": true
+      },
+      "cooldown": 0,
+      "effects": [
+        {
+          "type": "add_tag",
+          "selector": "named_actor",
+          "tag": "scented"
+        },
+        {
+          "type": "move_actor",
+          "selector": "player",
+          "destination": "adjacent"
+        }
+      ],
+      "event_key": "ability.rogue.lure"
+    },
+    {
+      "id": "wizard.fireball",
+      "class_id": "wizard",
+      "key": "f",
+      "resource": {
+        "kind": "spark",
+        "scope": "delve",
+        "cost": 1,
+        "maximum": 1
+      },
+      "preconditions": {
+        "visible_zone": true,
+        "confirmation": true
+      },
+      "cooldown": 0,
+      "effects": [
+        {
+          "type": "damage_selector",
+          "selector": "actors_in_zone",
+          "amount": 8
+        },
+        {
+          "type": "signal",
+          "selector": "zone",
+          "kind": "heat"
+        },
+        {
+          "type": "signal",
+          "selector": "zone",
+          "kind": "sound"
+        }
+      ],
+      "event_key": "ability.wizard.fireball"
+    }
+  ],
+  "inventory_items": [
+    "brass_case"
+  ],
+  "outcome_flags": [
+    "exit_open"
+  ],
+  "terminals": [
+    {
+      "id": "victory",
+      "kind": "victory",
+      "all": [
+        {
+          "kind": "room_is",
+          "room_id": "balcony"
+        },
+        {
+          "kind": "inventory_has",
+          "item_id": "brass_case"
+        }
+      ],
+      "event_key": "terminal.victory"
+    },
+    {
+      "id": "death",
+      "kind": "death",
+      "all": [
+        {
+          "kind": "outcome_state",
+          "state": "death"
+        }
+      ],
+      "event_key": "terminal.death"
+    }
+  ],
+  "chains": [
+    {
+      "id": "scent_hunt_feed",
+      "event_keys": [
+        "chain.scent.hunt.feed"
+      ],
+      "minimum_effect": 1,
+      "step_limit": 3
+    }
+  ],
+  "ecology": {
+    "profiles": [
+      {
+        "id": "kiln_drake",
+        "priority": [
+          "finish_declared_bite",
+          "flee_announced_crush",
+          "pursue_scented_living_prey",
+          "consume_loose_edible_bait",
+          "retaliate_last_attacker",
+          "digest_two_beats",
+          "sleep_sated"
+        ],
+        "event_key": "ecology.drake",
+        "fact_slots": [
+          "actor_name"
+        ]
+      },
+      {
+        "id": "banquet_goblin",
+        "priority": [
+          "flee_drake_in_zone",
+          "guard_assigned_food_or_exit",
+          "strike_reachable_intruder",
+          "return_to_post"
+        ],
+        "event_key": "ecology.goblin",
+        "fact_slots": [
+          "actor_name"
+        ]
+      }
+    ]
+  },
+  "chronicle": {
+    "event_keys": [
+      "chronicle.signature"
+    ]
+  },
+  "bank": {
+    "entries": [
+      {
+        "key": "ability.fighter.hold_door",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "ability.rogue.lure",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "ability.wizard.fireball",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "actor.intent.cancelled",
+        "fact_slots": [
+          "actor_name",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{target_name}}"
+      },
+      {
+        "key": "chain.scent.hunt.feed",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "chronicle.line",
+        "fact_slots": [
+          "outcome"
+        ],
+        "variants": [
+          "{{outcome}}"
+        ],
+        "fallback": "{{outcome}}"
+      },
+      {
+        "key": "chronicle.signature",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "ecology.drake",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "ecology.goblin",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "enemy.defeated",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "intent.cancelled",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "intent.drake.feed",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "intent.drake.flee",
+        "fact_slots": [
+          "actor_name",
+          "destination_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{destination_name}}"
+        ],
+        "fallback": "{{actor_name}} {{destination_name}}"
+      },
+      {
+        "key": "intent.drake.hold",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "intent.drake.move",
+        "fact_slots": [
+          "actor_name",
+          "destination_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{destination_name}}"
+        ],
+        "fallback": "{{actor_name}} {{destination_name}}"
+      },
+      {
+        "key": "intent.goblin.guard",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "intent.goblin.hook",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "intent.goblin.slinger",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "intent.goblin.slinger_player",
+        "fact_slots": [
+          "actor_name",
+          "damage",
+          "target_name"
+        ],
+        "variants": [
+          "{{actor_name}} {{damage}} {{target_name}}"
+        ],
+        "fallback": "{{actor_name}} {{damage}} {{target_name}}"
+      },
+      {
+        "key": "material.r1.oil_flash",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r10.feeding",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r11.fear",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r12.sight",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r2.ignition",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r3.damp_heat",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r4.fire_spread",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r5.extinguish",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r6.break",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r7.drop",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r8.sound",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.r9.appetite",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "material.reaction",
+        "fact_slots": [
+          "amount",
+          "zone"
+        ],
+        "variants": [
+          "{{amount}} {{zone}}"
+        ],
+        "fallback": "{{amount}} {{zone}}"
+      },
+      {
+        "key": "move.blocked",
+        "fact_slots": [
+          "actor_name"
+        ],
+        "variants": [
+          "{{actor_name}}"
+        ],
+        "fallback": "{{actor_name}}"
+      },
+      {
+        "key": "move.no_exit",
+        "fact_slots": [
+          "destination"
+        ],
+        "variants": [
+          "{{destination}}"
+        ],
+        "fallback": "{{destination}}"
+      },
+      {
+        "key": "room.description",
+        "fact_slots": [
+          "room_name"
+        ],
+        "variants": [
+          "{{room_name}}"
+        ],
+        "fallback": "{{room_name}}"
+      },
+      {
+        "key": "room.enter",
+        "fact_slots": [
+          "room_name"
+        ],
+        "variants": [
+          "{{room_name}}"
+        ],
+        "fallback": "{{room_name}}"
+      },
+      {
+        "key": "room.return",
+        "fact_slots": [
+          "room_name"
+        ],
+        "variants": [
+          "{{room_name}}"
+        ],
+        "fallback": "{{room_name}}"
+      },
+      {
+        "key": "target.unknown",
+        "fact_slots": [
+          "target_name"
+        ],
+        "variants": [
+          "{{target_name}}"
+        ],
+        "fallback": "{{target_name}}"
+      },
+      {
+        "key": "terminal.closed",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "terminal.death",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "terminal.quit",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      },
+      {
+        "key": "terminal.victory",
+        "fact_slots": [],
+        "variants": [
+          "The world remembers."
+        ],
+        "fallback": "The world remembers."
+      }
+    ]
+  }
+}
